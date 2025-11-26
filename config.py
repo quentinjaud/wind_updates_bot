@@ -1,5 +1,5 @@
 """
-Configuration du bot météo
+Configuration du bot météo - Wind Bot
 """
 import os
 
@@ -42,3 +42,9 @@ MODELS = {
 
 # Runs disponibles pour abonnement
 AVAILABLE_RUNS = [0, 6, 12, 18]
+
+# Runs par défaut pour les nouveaux utilisateurs
+# 06h → notif vers 11h-12h
+# 12h → notif vers 16h-17h
+# Pas de notification nocturne par défaut
+DEFAULT_RUNS = [6, 12]

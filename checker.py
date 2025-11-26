@@ -47,7 +47,7 @@ def set_cached_run(model: str, run_datetime: datetime):
 def get_all_cached_runs() -> dict[str, dict]:
     """
     Retourne tous les runs en cache avec leur âge.
-    Pour la commande /lastruns.
+    Pour la commande /derniersruns.
     """
     now = datetime.now(timezone.utc)
     result = {}

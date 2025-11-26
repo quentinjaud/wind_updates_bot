@@ -1,4 +1,4 @@
-# Wind Updates Bot 🌊⛵
+# Wind Bot 🌊⛵
 
 Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèles météorologiques sont disponibles.
 
@@ -7,6 +7,7 @@ Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèle
 - **Notifications push** : Reçois une alerte dès qu'un nouveau run est calculé et publié
 - **4 modèles supportés** : AROME, ARPEGE, GFS, ECMWF
 - **Personnalisation** : Choisis les modèles et les heures de run qui t'intéressent
+- **Runs de jour par défaut** : Pas de notification nocturne sauf si tu le demandes
 - **Consultation** : Vérifie à tout moment les derniers runs disponibles
 - **Cache intelligent** : Limite les requêtes API (cache 5 min)
 
@@ -15,12 +16,12 @@ Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèle
 | Commande | Description |
 |----------|-------------|
 | `/start` | S'inscrire au bot |
-| `/models` | Choisir les modèles météo à suivre |
-| `/runs` | Choisir les heures de run (00h, 06h, 12h, 18h) |
-| `/status` | Voir ses abonnements actuels |
-| `/lastruns` | Afficher les derniers runs disponibles |
-| `/stop` | Se désabonner des notifications |
-| `/help` | Afficher l'aide |
+| `/aide` | Comprendre les runs météo et leurs horaires |
+| `/modeles` | Choisir les modèles météo à suivre |
+| `/horaires` | Choisir les runs (00h, 06h, 12h, 18h) |
+| `/statut` | Voir ses abonnements actuels |
+| `/derniersruns` | Afficher les derniers runs disponibles |
+| `/arreter` | Se désabonner des notifications |
 
 ## Modèles météo supportés
 
@@ -31,6 +32,17 @@ Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèle
 | **GFS** | NOAA | 0.25° | Monde | 00h, 06h, 12h, 18h |
 | **ECMWF** | Centre Européen | 0.25° | Monde | 00h, 06h, 12h, 18h |
 
+## Horaires de disponibilité (heure de Paris)
+
+| Run | AROME | ARPEGE | GFS | ECMWF |
+|-----|-------|--------|-----|-------|
+| 00h | ~03h45 🌙 | ~04h50 🌙 | ~04h 🌙 | ~08h ☀️ |
+| 06h | ~12h10 ☀️ | ~11h35 ☀️ | ~10h ☀️ | ~14h ☀️ |
+| 12h | ~16h55 ☀️ | ~16h25 ☀️ | ~16h ☀️ | ~20h 🌙 |
+| 18h | ~00h10 🌙 | ~23h35 🌙 | ~22h 🌙 | ~02h 🌙 |
+
+**Par défaut**, les nouveaux utilisateurs sont abonnés aux runs **06h** et **12h** uniquement (notifications vers midi et 17h).
+
 ## Architecture
 
 ```
@@ -40,12 +52,12 @@ Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèle
 │  │ Météo-France│  │    ECMWF     │  │   NOAA    │  │
 │  │  (API WMS)  │  │ (opendata)   │  │ (NOMADS)  │  │
 │  └──────┬──────┘  └──────┬───────┘  └─────┬─────┘  │
-└─────────┼────────────────┼──────────────────┼───────┘
-          │                │                  │
-          └────────────────┼──────────────────┘
+└─────────┼────────────────┼────────────────┼────────┘
+          │                │                │
+          └────────────────┼────────────────┘
                            │
                    ┌───────▼────────┐
-                   │  Bot Python    │
+                   │   Wind Bot     │
                    │  sur Railway   │
                    │                │
                    │ • Scheduler    │◄── Vérifie toutes les 15 min
@@ -70,29 +82,6 @@ Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèle
                    │  (push notifs) │
                    └────────────────┘
 ```
-
-## Comment ça marche
-
-### Détection des nouveaux runs
-
-1. **Toutes les 15 minutes**, le scheduler vérifie chaque modèle
-2. Pour **AROME/ARPEGE** : appel à l'API Météo-France (`GetCapabilities` WMS) qui retourne les runs disponibles
-3. Pour **GFS** : vérification de l'existence du fichier sur NOMADS (requête HEAD)
-4. Pour **ECMWF** : utilisation du package `ecmwf-opendata` (méthode `latest()`)
-5. Si un nouveau run est détecté → notification aux utilisateurs abonnés
-
-### Cache mémoire
-
-Pour éviter de surcharger les APIs :
-- Les derniers runs sont mis en cache pendant **5 minutes**
-- La commande `/lastruns` utilise le cache
-- Le scheduler rafraîchit le cache à chaque vérification
-
-### Base de données
-
-SQLite stocke :
-- **Users** : chat_id, username, modèles suivis, runs suivis, statut actif
-- **Last runs** : dernier run notifié par modèle (évite les doublons)
 
 ## Installation
 
@@ -174,10 +163,6 @@ python-telegram-bot>=21.0   # Bot Telegram
 requests>=2.31.0            # Requêtes HTTP
 ecmwf-opendata>=0.3.0       # API ECMWF open data
 ```
-
-## Contribution
-
-Projet open source. PRs bienvenues !
 
 ## Auteur
 

@@ -1,5 +1,6 @@
 """
-Bot Telegram - Notifications Modèles Météo
+Wind Bot - Notifications Modèles Météo
+Bot Telegram qui prévient quand les runs météo sont disponibles
 """
 import logging
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import BOT_TOKEN, MODELS, AVAILABLE_RUNS, ADMIN_CHAT_ID
+from config import BOT_TOKEN, MODELS, AVAILABLE_RUNS, ADMIN_CHAT_ID, DEFAULT_RUNS
 from database import (
     init_database,
     get_or_create_user,
@@ -20,6 +21,7 @@ from database import (
     get_user_runs,
     toggle_model_for_user,
     toggle_run_for_user,
+    update_user_runs,
     deactivate_user,
     reactivate_user,
     count_active_users,
@@ -48,26 +50,75 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reactivate_user(chat_id)
     
     welcome_text = """
-⛵ **Bienvenue sur Wind Updates Bot !**
+🌊 **Bienvenue sur Wind Bot !**
 
-Je te notifie en push quand de nouveaux runs de modèles météo sont disponibles.
+Je te préviens dès qu'un nouveau run météo est disponible.
 
-📌 **Commandes :**
-/models — Choisir les modèles à suivre
-/runs — Choisir les runs (00h, 06h, 12h, 18h)
-/status — Voir tes abonnements
-/lastruns — Voir les derniers runs disponibles
-/stop — Se désabonner
+✅ Tu es abonné par défaut aux runs **06h** et **12h**.
+→ Notifications vers midi et 17h, pas de réveil nocturne 😴
 
-Commence par /models pour choisir tes modèles !
+Pour ajouter d'autres runs (00h, 18h) → /horaires
+
+🆕 Nouveau ici ? Tape /aide pour comprendre les runs.
+
+📋 **Commandes :**
+/modeles — Choisir les modèles (AROME, GFS...)
+/horaires — Choisir quels runs recevoir
+/statut — Voir tes abonnements
+/aide — Comprendre les runs météo
     """
     
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
     logger.info(f"User {chat_id} ({username}) started the bot")
 
 
-async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /models - Choix des modèles à suivre"""
+async def aide_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /aide - Explique le fonctionnement des modèles météo"""
+    
+    aide_text = """
+📚 **Comment ça marche ?**
+
+Les modèles météo (AROME, GFS...) calculent des prévisions plusieurs fois par jour. Chaque calcul s'appelle un **run**.
+
+🕐 **Pourquoi un délai ?**
+Un run "00h" utilise les observations de 00h UTC, mais le calcul prend du temps. Il sort donc quelques heures plus tard.
+
+⏰ **Horaires de disponibilité (heure de Paris) :**
+
+**AROME** ⛵ (France, très précis) :
+• Run 00h → dispo vers 03h45
+• Run 06h → dispo vers 12h10
+• Run 12h → dispo vers 16h55
+• Run 18h → dispo vers 00h10
+
+**ARPEGE** 🌍 (Europe/Monde) :
+• Run 00h → dispo vers 04h50
+• Run 06h → dispo vers 11h35
+• Run 12h → dispo vers 16h25
+• Run 18h → dispo vers 23h35
+
+**GFS** 🌎 (Monde, américain) :
+• Runs 00h/06h/12h/18h → dispo 4-5h après
+
+**ECMWF** 🇪🇺 (Monde, référence) :
+• Runs 00h/06h/12h/18h → dispo 8-10h après
+
+💡 **Conseil nav :**
+Pour une nav le matin, consulte le run 00h dès qu'il sort (~04h).
+Pour une nav l'après-midi, attends le run 06h (~12h).
+
+📋 **Commandes :**
+/modeles — Choisir les modèles
+/horaires — Choisir quels runs recevoir
+/statut — Voir tes abonnements
+/arreter — Se désabonner
+    """
+    
+    await update.message.reply_text(aide_text, parse_mode="Markdown")
+
+
+async def modeles_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /modeles - Choix des modèles à suivre"""
     chat_id = update.message.chat.id
     user_models = get_user_models(chat_id)
     
@@ -99,49 +150,26 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 
-async def runs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /runs - Choix des runs à suivre"""
+async def horaires_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /horaires - Choix des runs à suivre"""
     chat_id = update.message.chat.id
     user_runs = get_user_runs(chat_id)
     
-    keyboard = []
-    
-    for run_hour in AVAILABLE_RUNS:
-        checked = "✅" if run_hour in user_runs else "⬜"
-        button_text = f"{run_hour:02d}h UTC {checked}"
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                button_text,
-                callback_data=f"toggle_run_{run_hour}"
-            )
-        ])
-    
-    # Bouton tous/aucun
-    keyboard.append([
-        InlineKeyboardButton("🔄 Tous les runs", callback_data="all_runs"),
-        InlineKeyboardButton("❌ Aucun", callback_data="no_runs"),
-    ])
-    
-    # Bouton de confirmation
-    keyboard.append([
-        InlineKeyboardButton("✔️ Terminé", callback_data="done_runs")
-    ])
-    
+    keyboard = build_horaires_keyboard(user_runs)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    text = "**Choisis les runs à suivre :**\n\n"
-    text += "_(Liste vide = tous les runs)_\n\n"
-    text += "• **00h** — Run de nuit\n"
-    text += "• **06h** — Run du matin\n"
-    text += "• **12h** — Run de midi\n"
-    text += "• **18h** — Run du soir\n"
+    text = """**Choisis les runs à suivre :**
+
+🌙 = notification de nuit (peut réveiller)
+☀️ = notification de jour
+
+_(Par défaut : 06h et 12h uniquement)_"""
     
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /status - Affiche l'état des abonnements"""
+async def statut_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /statut - Affiche l'état des abonnements"""
     chat_id = update.message.chat.id
     user = get_user(chat_id)
     
@@ -181,13 +209,13 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Conseil si config incomplète
     if not models:
-        status_text += "\n⚠️ Configure tes modèles avec /models"
+        status_text += "\n⚠️ Configure tes modèles avec /modeles"
     
     await update.message.reply_text(status_text, parse_mode="Markdown")
 
 
-async def lastruns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /lastruns - Affiche le dernier run de chaque modèle"""
+async def derniersruns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /derniersruns - Affiche le dernier run de chaque modèle"""
     
     # Message d'attente
     wait_msg = await update.message.reply_text("🔍 Récupération des derniers runs...")
@@ -229,8 +257,8 @@ async def lastruns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait_msg.edit_text(text, parse_mode="Markdown")
 
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /stop - Désabonnement"""
+async def arreter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /arreter - Désabonnement"""
     chat_id = update.message.chat.id
     
     keyboard = [
@@ -249,37 +277,6 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /help - Aide"""
-    help_text = """
-⛵ **Wind Updates Bot — Aide**
-
-**Commandes disponibles :**
-/start — S'inscrire ou se réabonner
-/models — Choisir les modèles météo
-/runs — Choisir les heures de run
-/status — Voir ses abonnements
-/lastruns — Voir les derniers runs disponibles
-/stop — Se désabonner
-/help — Afficher cette aide
-
-**Modèles disponibles :**
-• **AROME** — Haute résolution France
-• **ARPEGE** — Europe/Monde
-• **GFS** — Global NOAA
-• **ECMWF** — Centre Européen
-
-**Comment ça marche ?**
-1. Choisis tes modèles avec /models
-2. Optionnel : filtre les runs avec /runs
-3. Reçois une notification push dès qu'un run est dispo !
-
-📬 Contact : @quentin\\_jaud
-    """
-    
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-
 # ============ CALLBACKS (BOUTONS) ============
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -293,7 +290,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ----- TOGGLE MODÈLE -----
     if data.startswith("toggle_model_"):
         model = data.replace("toggle_model_", "")
-        enabled = toggle_model_for_user(chat_id, model)
+        toggle_model_for_user(chat_id, model)
         
         # Reconstruire le clavier avec le nouvel état
         user_models = get_user_models(chat_id)
@@ -326,36 +323,52 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ----- TOGGLE RUN -----
     elif data.startswith("toggle_run_"):
         run_hour = int(data.replace("toggle_run_", ""))
-        enabled = toggle_run_for_user(chat_id, run_hour)
+        toggle_run_for_user(chat_id, run_hour)
         
         # Reconstruire le clavier
         user_runs = get_user_runs(chat_id)
-        keyboard = build_runs_keyboard(user_runs)
+        keyboard = build_horaires_keyboard(user_runs)
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        text = "**Choisis les runs à suivre :**\n\n_(Liste vide = tous les runs)_"
+        text = """**Choisis les runs à suivre :**
+
+🌙 = notification de nuit (peut réveiller)
+☀️ = notification de jour
+
+_(Par défaut : 06h et 12h uniquement)_"""
+        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     
     # ----- TOUS LES RUNS -----
     elif data == "all_runs":
-        from database import update_user_runs
-        update_user_runs(chat_id, [])  # Liste vide = tous
-        
-        keyboard = build_runs_keyboard([])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = "**Choisis les runs à suivre :**\n\n_(Liste vide = tous les runs)_"
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-    
-    # ----- AUCUN RUN -----
-    elif data == "no_runs":
-        from database import update_user_runs
         update_user_runs(chat_id, AVAILABLE_RUNS.copy())
         
-        keyboard = build_runs_keyboard(AVAILABLE_RUNS.copy())
+        keyboard = build_horaires_keyboard(AVAILABLE_RUNS.copy())
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        text = "**Choisis les runs à suivre :**\n\n_(Décoche ceux que tu ne veux pas)_"
+        text = """**Choisis les runs à suivre :**
+
+🌙 = notification de nuit (peut réveiller)
+☀️ = notification de jour
+
+⚠️ _Attention : tu recevras des notifications la nuit !_"""
+        
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    
+    # ----- RUNS PAR DÉFAUT (JOUR) -----
+    elif data == "default_runs":
+        update_user_runs(chat_id, DEFAULT_RUNS.copy())
+        
+        keyboard = build_horaires_keyboard(DEFAULT_RUNS.copy())
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = """**Choisis les runs à suivre :**
+
+🌙 = notification de nuit (peut réveiller)
+☀️ = notification de jour
+
+✅ _Runs de jour uniquement (06h, 12h)_"""
+        
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     
     # ----- TERMINÉ MODÈLES -----
@@ -365,31 +378,35 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             models_str = ", ".join(models)
             await query.edit_message_text(
                 f"✅ **Modèles enregistrés :**\n{models_str}\n\n"
-                f"Utilise /runs pour filtrer les runs, ou /status pour voir tes abonnements.",
+                f"Utilise /horaires pour choisir les runs, ou /statut pour voir tes abonnements.",
                 parse_mode="Markdown"
             )
         else:
             await query.edit_message_text(
                 "⚠️ Tu n'as sélectionné aucun modèle.\n\n"
-                "Utilise /models pour en choisir.",
+                "Utilise /modeles pour en choisir.",
                 parse_mode="Markdown"
             )
     
-    # ----- TERMINÉ RUNS -----
+    # ----- TERMINÉ HORAIRES -----
     elif data == "done_runs":
         runs = get_user_runs(chat_id)
         if runs:
             runs_str = ", ".join([f"{r:02d}h" for r in sorted(runs)])
+            night_warning = ""
+            if 0 in runs or 18 in runs:
+                night_warning = "\n\n🌙 _Tu recevras des notifications la nuit._"
             await query.edit_message_text(
-                f"✅ **Runs enregistrés :**\n{runs_str} UTC\n\n"
-                f"Utilise /status pour voir tes abonnements.",
+                f"✅ **Runs enregistrés :**\n{runs_str} UTC{night_warning}\n\n"
+                f"Utilise /statut pour voir tes abonnements.",
                 parse_mode="Markdown"
             )
         else:
             await query.edit_message_text(
                 "✅ **Tous les runs activés**\n\n"
                 "Tu seras notifié pour chaque run de tes modèles.\n"
-                "Utilise /status pour voir tes abonnements.",
+                "🌙 _Attention : notifications de nuit incluses !_\n\n"
+                "Utilise /statut pour voir tes abonnements.",
                 parse_mode="Markdown"
             )
     
@@ -407,13 +424,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Désabonnement annulé. ✌️")
 
 
-def build_runs_keyboard(user_runs: list) -> list:
-    """Construit le clavier pour les runs"""
+def build_horaires_keyboard(user_runs: list) -> list:
+    """Construit le clavier pour les horaires de runs"""
     keyboard = []
     
-    for run_hour in AVAILABLE_RUNS:
+    # Infos sur chaque run
+    run_info = [
+        (0, "🌙", "nuit ~04h"),
+        (6, "☀️", "jour ~12h"),
+        (12, "☀️", "jour ~17h"),
+        (18, "🌙", "nuit ~00h"),
+    ]
+    
+    for run_hour, emoji, timing in run_info:
         checked = "✅" if run_hour in user_runs else "⬜"
-        button_text = f"{run_hour:02d}h UTC {checked}"
+        button_text = f"{emoji} Run {run_hour:02d}h → {timing} {checked}"
         
         keyboard.append([
             InlineKeyboardButton(
@@ -422,9 +447,10 @@ def build_runs_keyboard(user_runs: list) -> list:
             )
         ])
     
+    # Boutons raccourcis
     keyboard.append([
-        InlineKeyboardButton("🔄 Tous les runs", callback_data="all_runs"),
-        InlineKeyboardButton("❌ Aucun", callback_data="no_runs"),
+        InlineKeyboardButton("☀️ Jour seul", callback_data="default_runs"),
+        InlineKeyboardButton("🔔 Tous", callback_data="all_runs"),
     ])
     
     keyboard.append([
@@ -474,14 +500,16 @@ def main():
     # Créer l'application
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Ajouter les handlers de commandes
+    # Ajouter les handlers de commandes (en français)
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("models", models_command))
-    app.add_handler(CommandHandler("runs", runs_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("lastruns", lastruns_command))
-    app.add_handler(CommandHandler("stop", stop_command))
-    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("aide", aide_command))
+    app.add_handler(CommandHandler("modeles", modeles_command))
+    app.add_handler(CommandHandler("horaires", horaires_command))
+    app.add_handler(CommandHandler("statut", statut_command))
+    app.add_handler(CommandHandler("derniersruns", derniersruns_command))
+    app.add_handler(CommandHandler("arreter", arreter_command))
+    
+    # Commandes admin
     app.add_handler(CommandHandler("stats", admin_stats_command))
     
     # Handler pour les boutons
@@ -492,8 +520,8 @@ def main():
     start_scheduler(app)
     
     # Lancer le bot
-    print("🚀 Bot démarré")
-    logger.info("Bot started")
+    print("🚀 Wind Bot démarré")
+    logger.info("Wind Bot started")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

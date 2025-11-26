@@ -4,7 +4,7 @@ Gestion de la base de données SQLite
 import sqlite3
 import json
 from datetime import datetime
-from config import DATABASE_PATH
+from config import DATABASE_PATH, DEFAULT_RUNS
 
 
 def get_connection():
@@ -68,11 +68,11 @@ def get_user(chat_id: int) -> dict | None:
 
 
 def create_user(chat_id: int, username: str = None) -> dict:
-    """Crée un nouvel utilisateur"""
+    """Crée un nouvel utilisateur avec runs par défaut (jour uniquement)"""
     conn = get_connection()
     conn.execute(
-        "INSERT OR IGNORE INTO users (chat_id, username) VALUES (?, ?)",
-        (chat_id, username)
+        "INSERT OR IGNORE INTO users (chat_id, username, runs) VALUES (?, ?, ?)",
+        (chat_id, username, json.dumps(DEFAULT_RUNS))
     )
     conn.commit()
     conn.close()

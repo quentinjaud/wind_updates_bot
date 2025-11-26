@@ -1,5 +1,6 @@
 """
 Scheduler pour la vérification périodique des runs météo
+Wind Bot
 """
 import logging
 import asyncio
