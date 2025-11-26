@@ -65,6 +65,7 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
 /modeles — Choisir les modèles (AROME, GFS...)
 /horaires — Choisir quels runs recevoir
 /statut — Voir tes abonnements
+/derniers — Derniers runs disponibles
 /aide — Comprendre les runs météo
     """
     
@@ -111,6 +112,7 @@ Pour une nav l'après-midi, attends le run 06h (~12h).
 /modeles — Choisir les modèles
 /horaires — Choisir quels runs recevoir
 /statut — Voir tes abonnements
+/derniers — Derniers runs disponibles
 /arreter — Se désabonner
     """
     
@@ -214,8 +216,8 @@ async def statut_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status_text, parse_mode="Markdown")
 
 
-async def derniersruns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /derniersruns - Affiche le dernier run de chaque modèle"""
+async def derniers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /derniers - Affiche le dernier run de chaque modèle"""
     
     # Message d'attente
     wait_msg = await update.message.reply_text("🔍 Récupération des derniers runs...")
@@ -481,6 +483,38 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
 
+async def testnotif_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /testnotif - Envoie une notification de test (admin only)"""
+    chat_id = update.message.chat.id
+    
+    if chat_id != ADMIN_CHAT_ID:
+        return
+    
+    from scheduler import send_notification
+    
+    # Simuler une notification pour le run 12h d'aujourd'hui
+    fake_run = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    
+    await update.message.reply_text("📤 Envoi d'une notification de test...")
+    await send_notification(context.bot, chat_id, "AROME", fake_run)
+    await update.message.reply_text("✅ Notification de test envoyée")
+
+
+async def forcecheck_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /forcecheck - Force une vérification immédiate (admin only)"""
+    chat_id = update.message.chat.id
+    
+    if chat_id != ADMIN_CHAT_ID:
+        return
+    
+    await update.message.reply_text("🔍 Vérification des modèles en cours...")
+    
+    from scheduler import check_all_models
+    await check_all_models(context.bot)
+    
+    await update.message.reply_text("✅ Vérification terminée. Regarde les logs pour les détails.")
+
+
 # ============ MAIN ============
 
 def main():
@@ -506,11 +540,13 @@ def main():
     app.add_handler(CommandHandler("modeles", modeles_command))
     app.add_handler(CommandHandler("horaires", horaires_command))
     app.add_handler(CommandHandler("statut", statut_command))
-    app.add_handler(CommandHandler("derniersruns", derniersruns_command))
+    app.add_handler(CommandHandler("derniers", derniers_command))
     app.add_handler(CommandHandler("arreter", arreter_command))
     
     # Commandes admin
     app.add_handler(CommandHandler("stats", admin_stats_command))
+    app.add_handler(CommandHandler("testnotif", testnotif_command))
+    app.add_handler(CommandHandler("forcecheck", forcecheck_command))
     
     # Handler pour les boutons
     app.add_handler(CallbackQueryHandler(button_callback))
