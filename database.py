@@ -3,13 +3,14 @@ Gestion de la base de données SQLite
 """
 import sqlite3
 import json
-from datetime import datetime
-from config import DATABASE_PATH, DEFAULT_RUNS
+from datetime import datetime, timezone
+
+from config import DATABASE_PATH
 
 
 def get_connection():
     """Retourne une connexion à la base de données"""
-    conn = sqlite3.connect(DATABASE_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
+    conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -25,16 +26,16 @@ def init_database():
             models TEXT DEFAULT '[]',
             runs TEXT DEFAULT '[]',
             active INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_notification TIMESTAMP
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_notification TEXT
         )
     """)
     
     conn.execute("""
         CREATE TABLE IF NOT EXISTS last_runs (
             model TEXT PRIMARY KEY,
-            run_datetime TIMESTAMP NOT NULL,
-            notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            run_datetime TEXT NOT NULL,
+            notified_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
@@ -68,11 +69,11 @@ def get_user(chat_id: int) -> dict | None:
 
 
 def create_user(chat_id: int, username: str = None) -> dict:
-    """Crée un nouvel utilisateur avec runs par défaut (jour uniquement)"""
+    """Crée un nouvel utilisateur"""
     conn = get_connection()
     conn.execute(
-        "INSERT OR IGNORE INTO users (chat_id, username, runs) VALUES (?, ?, ?)",
-        (chat_id, username, json.dumps(DEFAULT_RUNS))
+        "INSERT OR IGNORE INTO users (chat_id, username) VALUES (?, ?)",
+        (chat_id, username)
     )
     conn.commit()
     conn.close()
@@ -223,10 +224,16 @@ def count_active_users() -> int:
 
 def save_last_run(model: str, run_datetime: datetime):
     """Sauvegarde le dernier run notifié pour un modèle"""
+    # Convertir en ISO string pour stockage SQLite
+    if run_datetime.tzinfo is None:
+        run_datetime = run_datetime.replace(tzinfo=timezone.utc)
+    
+    iso_string = run_datetime.isoformat()
+    
     conn = get_connection()
     conn.execute(
-        "INSERT OR REPLACE INTO last_runs (model, run_datetime) VALUES (?, ?)",
-        (model, run_datetime)
+        "INSERT OR REPLACE INTO last_runs (model, run_datetime, notified_at) VALUES (?, ?, ?)",
+        (model, iso_string, datetime.now(timezone.utc).isoformat())
     )
     conn.commit()
     conn.close()
@@ -242,8 +249,16 @@ def get_last_run(model: str) -> datetime | None:
     row = cursor.fetchone()
     conn.close()
     
-    if row:
-        return row["run_datetime"]
+    if row and row["run_datetime"]:
+        # Parser la string ISO en datetime
+        try:
+            dt = datetime.fromisoformat(row["run_datetime"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            return None
+    
     return None
 
 
@@ -253,5 +268,9 @@ def is_new_run(model: str, run_datetime: datetime) -> bool:
     
     if last is None:
         return True
+    
+    # S'assurer que les deux sont timezone-aware pour comparaison
+    if run_datetime.tzinfo is None:
+        run_datetime = run_datetime.replace(tzinfo=timezone.utc)
     
     return run_datetime > last
