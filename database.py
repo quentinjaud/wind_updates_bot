@@ -123,6 +123,9 @@ def get_user_runs(chat_id: int) -> list:
 
 def toggle_model_for_user(chat_id: int, model: str) -> bool:
     """Active/désactive un modèle pour un utilisateur. Retourne le nouvel état."""
+    # S'assurer que l'utilisateur existe
+    get_or_create_user(chat_id)
+    
     models = get_user_models(chat_id)
     
     if model in models:
@@ -138,6 +141,9 @@ def toggle_model_for_user(chat_id: int, model: str) -> bool:
 
 def toggle_run_for_user(chat_id: int, run_hour: int) -> bool:
     """Active/désactive un run pour un utilisateur. Retourne le nouvel état."""
+    # S'assurer que l'utilisateur existe
+    get_or_create_user(chat_id)
+    
     runs = get_user_runs(chat_id)
     
     if run_hour in runs:
