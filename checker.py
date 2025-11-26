@@ -47,7 +47,7 @@ def set_cached_run(model: str, run_datetime: datetime):
 def get_all_cached_runs() -> dict[str, dict]:
     """
     Retourne tous les runs en cache avec leur âge.
-    Pour la commande /derniersruns.
+    Pour la commande /lastruns.
     """
     now = datetime.now(timezone.utc)
     result = {}
@@ -86,6 +86,7 @@ def init_cache():
             logger.info(f"  ✅ {model} : cache initialisé")
         except Exception as e:
             logger.warning(f"  ⚠️ {model} : échec init cache ({e})")
+
 
 # Configuration des APIs Météo-France
 METEOFRANCE_APIS = {
@@ -414,10 +415,34 @@ def get_expected_gfs_run(current_time: datetime) -> datetime | None:
 
 # ============ ECMWF ============
 
+def check_ecmwf_file_exists(run_datetime: datetime) -> bool:
+    """
+    Vérifie si un run ECMWF existe sur le serveur de données ouvertes.
+    """
+    try:
+        date_str = run_datetime.strftime("%Y%m%d")
+        hour_str = run_datetime.strftime("%H")
+        
+        # URL du serveur ECMWF open data
+        url = f"https://data.ecmwf.int/forecasts/{date_str}/{hour_str}z/ifs/0p25/oper/"
+        
+        response = requests.head(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        
+        if response.status_code == 200:
+            logger.debug(f"ECMWF run {run_datetime} disponible")
+            return True
+        
+        return False
+        
+    except requests.RequestException as e:
+        logger.debug(f"ECMWF check failed: {e}")
+        return False
+
+
 def get_latest_ecmwf_run(use_cache: bool = True) -> datetime | None:
     """
-    Récupère le dernier run ECMWF disponible via ecmwf-opendata.
-    Utilise client.latest() qui ne télécharge pas les données.
+    Récupère le dernier run ECMWF disponible.
+    Vérifie directement sur le serveur de données ouvertes ECMWF.
     """
     # Vérifier le cache d'abord
     if use_cache:
@@ -426,53 +451,41 @@ def get_latest_ecmwf_run(use_cache: bool = True) -> datetime | None:
             logger.debug("ECMWF: utilisation du cache")
             return cached
     
-    try:
-        from ecmwf.opendata import Client
+    current_time = datetime.now(timezone.utc)
+    run_hours = [0, 6, 12, 18]
+    
+    # ECMWF publie ~7-9h après le run
+    # Chercher les runs récents
+    for days_back in range(2):
+        base_date = current_time.date() - timedelta(days=days_back)
         
-        client = Client(source="ecmwf")
-        
-        # latest() retourne un objet avec .datetime
-        result = client.latest(
-            type="fc",
-            step=0,
-        )
-        
-        if result and hasattr(result, 'datetime'):
-            run_datetime = result.datetime
-            # S'assurer que c'est timezone-aware
-            if run_datetime.tzinfo is None:
-                run_datetime = run_datetime.replace(tzinfo=timezone.utc)
-            logger.info(f"ECMWF dernier run: {run_datetime}")
-            set_cached_run("ECMWF", run_datetime)
-            return run_datetime
-        
-        return None
-        
-    except ImportError:
-        logger.warning("Package ecmwf-opendata non installé")
-        return None
-    except Exception as e:
-        logger.error(f"Erreur récupération ECMWF: {e}")
-        return None
+        for run_hour in reversed(run_hours):
+            run_time = datetime(
+                base_date.year, base_date.month, base_date.day,
+                run_hour, 0, 0, tzinfo=timezone.utc
+            )
+            
+            # Ne pas chercher dans le futur
+            if run_time > current_time:
+                continue
+            
+            # ECMWF dispo ~8h après le run
+            expected_availability = run_time + timedelta(hours=8)
+            if current_time < expected_availability:
+                continue
+            
+            # Vérifier sur le serveur ECMWF
+            if check_ecmwf_file_exists(run_time):
+                set_cached_run("ECMWF", run_time)
+                logger.info(f"ECMWF dernier run: {run_time}")
+                return run_time
+    
+    return None
 
 
 def check_ecmwf_availability(run_datetime: datetime) -> bool:
-    """
-    Vérifie si un run ECMWF spécifique est disponible.
-    """
-    latest = get_latest_ecmwf_run(use_cache=False)  # Pas de cache pour la vérification
-    
-    if latest is None:
-        return False
-    
-    # Normaliser pour comparaison
-    run_datetime = run_datetime.replace(microsecond=0)
-    if run_datetime.tzinfo is None:
-        run_datetime = run_datetime.replace(tzinfo=timezone.utc)
-    
-    latest = latest.replace(microsecond=0)
-    
-    return latest >= run_datetime
+    """Vérifie si un run ECMWF spécifique est disponible."""
+    return check_ecmwf_file_exists(run_datetime)
 
 
 def get_expected_ecmwf_run(current_time: datetime) -> datetime | None:
