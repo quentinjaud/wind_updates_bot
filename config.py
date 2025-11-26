@@ -9,6 +9,10 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 # Base de données
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "bot.db")
 
+# API Keys Météo-France
+AROME_API_KEY = os.environ.get("AROME_API_KEY")
+ARPEGE_API_KEY = os.environ.get("ARPEGE_API_KEY")
+
 # ID admin pour tests (toi)
 ADMIN_CHAT_ID = 673360042
 

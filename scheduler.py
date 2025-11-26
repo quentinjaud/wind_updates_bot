@@ -1,0 +1,161 @@
+"""
+Scheduler pour la vérification périodique des runs météo
+"""
+import logging
+import asyncio
+from datetime import datetime, timezone
+
+from config import MODELS
+from database import (
+    get_last_run,
+    save_last_run,
+    is_new_run,
+    get_subscribed_users,
+)
+from checker import check_model_availability, get_expected_run
+
+logger = logging.getLogger(__name__)
+
+# Intervalle entre les vérifications (en secondes)
+CHECK_INTERVAL = 15 * 60  # 15 minutes
+
+
+async def send_notification(bot, chat_id: int, model: str, run_datetime: datetime):
+    """
+    Envoie une notification à un utilisateur.
+    """
+    emoji_map = {
+        "AROME": "⛵",
+        "ARPEGE": "🌍",
+        "GFS": "🌎",
+        "ECMWF": "🇪🇺",
+    }
+    
+    emoji = emoji_map.get(model, "🌐")
+    run_hour = run_datetime.hour
+    run_date = run_datetime.strftime("%d/%m/%Y")
+    now = datetime.now(timezone.utc)
+    
+    message = f"""
+{emoji} **Nouveau run disponible !**
+
+📊 **Modèle :** {model}
+⏰ **Run :** {run_hour:02d}h UTC
+📅 **Date :** {run_date}
+🕐 **Notifié à :** {now.strftime("%H:%M")} UTC
+
+🔗 **Liens :**
+• [Meteociel](https://www.meteociel.fr/modeles/)
+• [Windy](https://www.windy.com/)
+"""
+    
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        logger.info(f"Notification envoyée à {chat_id}: {model} {run_hour}h")
+        return True
+    except Exception as e:
+        logger.error(f"Erreur envoi notification à {chat_id}: {e}")
+        return False
+
+
+async def check_and_notify(bot, model: str):
+    """
+    Vérifie un modèle et notifie les utilisateurs si nouveau run.
+    """
+    current_time = datetime.now(timezone.utc)
+    
+    # Calculer le run attendu
+    expected_run = get_expected_run(model, current_time)
+    
+    if not expected_run:
+        logger.debug(f"{model}: pas de run attendu")
+        return
+    
+    # Vérifier si c'est un nouveau run (pas encore notifié)
+    if not is_new_run(model, expected_run):
+        logger.debug(f"{model}: run {expected_run} déjà notifié")
+        return
+    
+    # Vérifier la disponibilité réelle
+    logger.info(f"{model}: vérification disponibilité run {expected_run}")
+    is_available = check_model_availability(model, expected_run)
+    
+    if not is_available:
+        logger.debug(f"{model}: run {expected_run} pas encore disponible")
+        return
+    
+    # Nouveau run disponible !
+    logger.info(f"✅ {model}: nouveau run {expected_run} détecté !")
+    
+    # Récupérer les utilisateurs abonnés
+    run_hour = expected_run.hour
+    subscribed_users = get_subscribed_users(model, run_hour)
+    
+    logger.info(f"{model}: {len(subscribed_users)} utilisateurs à notifier")
+    
+    # Envoyer les notifications
+    success_count = 0
+    for chat_id in subscribed_users:
+        success = await send_notification(bot, chat_id, model, expected_run)
+        if success:
+            success_count += 1
+        
+        # Rate limiting Telegram (30 msg/sec max)
+        await asyncio.sleep(0.05)
+    
+    logger.info(f"{model}: {success_count}/{len(subscribed_users)} notifications envoyées")
+    
+    # Marquer le run comme notifié
+    save_last_run(model, expected_run)
+
+
+async def check_all_models(bot):
+    """
+    Vérifie tous les modèles.
+    """
+    logger.info("🔍 Début vérification des modèles...")
+    
+    for model in MODELS.keys():
+        try:
+            await check_and_notify(bot, model)
+        except Exception as e:
+            logger.error(f"Erreur vérification {model}: {e}")
+        
+        # Petite pause entre les modèles
+        await asyncio.sleep(1)
+    
+    logger.info("✅ Fin vérification des modèles")
+
+
+async def scheduler_loop(bot):
+    """
+    Boucle principale du scheduler.
+    """
+    logger.info(f"🚀 Scheduler démarré (intervalle: {CHECK_INTERVAL}s)")
+    
+    while True:
+        try:
+            await check_all_models(bot)
+        except Exception as e:
+            logger.error(f"Erreur scheduler: {e}")
+        
+        # Attendre avant la prochaine vérification
+        await asyncio.sleep(CHECK_INTERVAL)
+
+
+def start_scheduler(app):
+    """
+    Démarre le scheduler dans le contexte de l'application Telegram.
+    """
+    async def post_init(application):
+        """Callback appelé après l'initialisation du bot."""
+        # Créer la tâche du scheduler
+        asyncio.create_task(scheduler_loop(application.bot))
+        logger.info("Scheduler initialisé")
+    
+    app.post_init = post_init

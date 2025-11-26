@@ -2,6 +2,7 @@
 Bot Telegram - Notifications Modèles Météo
 """
 import logging
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -23,6 +24,7 @@ from database import (
     reactivate_user,
     count_active_users,
 )
+from checker import get_all_latest_runs, get_all_cached_runs
 
 # Configuration logging
 logging.basicConfig(
@@ -54,6 +56,7 @@ Je te notifie en push quand de nouveaux runs de modèles météo sont disponible
 /models — Choisir les modèles à suivre
 /runs — Choisir les runs (00h, 06h, 12h, 18h)
 /status — Voir tes abonnements
+/lastruns — Voir les derniers runs disponibles
 /stop — Se désabonner
 
 Commence par /models pour choisir tes modèles !
@@ -183,6 +186,49 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status_text, parse_mode="Markdown")
 
 
+async def lastruns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /lastruns - Affiche le dernier run de chaque modèle"""
+    
+    # Message d'attente
+    wait_msg = await update.message.reply_text("🔍 Récupération des derniers runs...")
+    
+    # Récupérer les infos du cache
+    cached_info = get_all_cached_runs()
+    
+    # Récupérer les derniers runs (avec cache)
+    runs = get_all_latest_runs(force_refresh=False)
+    
+    now = datetime.now(timezone.utc)
+    
+    text = "📊 **Derniers runs disponibles :**\n\n"
+    
+    for model, run_dt in runs.items():
+        emoji = MODELS.get(model, {}).get("emoji", "🌐")
+        
+        if run_dt:
+            run_str = run_dt.strftime("%d/%m %Hh UTC")
+            
+            # Indiquer si c'est du cache
+            cache_info = cached_info.get(model, {})
+            if cache_info.get("is_fresh"):
+                age = cache_info.get("age_seconds", 0)
+                if age > 60:
+                    cache_note = f" _(cache {age // 60}min)_"
+                else:
+                    cache_note = " _(cache)_"
+            else:
+                cache_note = " _(frais)_"
+            
+            text += f"{emoji} **{model}** : {run_str}{cache_note}\n"
+        else:
+            text += f"{emoji} **{model}** : _indisponible_\n"
+    
+    text += f"\n🕐 _Heure actuelle : {now.strftime('%H:%M')} UTC_"
+    text += "\n\n💡 Le cache est rafraîchi toutes les 5 min."
+    
+    await wait_msg.edit_text(text, parse_mode="Markdown")
+
+
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Commande /stop - Désabonnement"""
     chat_id = update.message.chat.id
@@ -213,6 +259,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /models — Choisir les modèles météo
 /runs — Choisir les heures de run
 /status — Voir ses abonnements
+/lastruns — Voir les derniers runs disponibles
 /stop — Se désabonner
 /help — Afficher cette aide
 
@@ -429,12 +476,17 @@ def main():
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("runs", runs_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("lastruns", lastruns_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("stats", admin_stats_command))
     
     # Handler pour les boutons
     app.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Intégrer le scheduler de vérification des runs
+    from scheduler import start_scheduler
+    start_scheduler(app)
     
     # Lancer le bot
     print("🚀 Bot démarré")
