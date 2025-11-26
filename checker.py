@@ -62,6 +62,31 @@ def get_all_cached_runs() -> dict[str, dict]:
     
     return result
 
+
+def init_cache():
+    """
+    Initialise le cache au démarrage du bot.
+    Récupère le dernier run de chaque modèle.
+    """
+    logger.info("🔄 Initialisation du cache des runs...")
+    
+    models = ["AROME", "ARPEGE", "GFS", "ECMWF"]
+    
+    for model in models:
+        try:
+            if model == "AROME":
+                get_latest_meteofrance_run("AROME", use_cache=False)
+            elif model == "ARPEGE":
+                get_latest_meteofrance_run("ARPEGE", use_cache=False)
+            elif model == "GFS":
+                get_latest_gfs_run(use_cache=False)
+            elif model == "ECMWF":
+                get_latest_ecmwf_run(use_cache=False)
+            
+            logger.info(f"  ✅ {model} : cache initialisé")
+        except Exception as e:
+            logger.warning(f"  ⚠️ {model} : échec init cache ({e})")
+
 # Configuration des APIs Météo-France
 METEOFRANCE_APIS = {
     "AROME": {

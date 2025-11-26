@@ -24,7 +24,7 @@ from database import (
     reactivate_user,
     count_active_users,
 )
-from checker import get_all_latest_runs, get_all_cached_runs
+from checker import get_all_latest_runs, get_all_cached_runs, init_cache
 
 # Configuration logging
 logging.basicConfig(
@@ -467,6 +467,9 @@ def main():
     
     # Initialiser la base de données
     init_database()
+    
+    # Pré-charger le cache des runs
+    init_cache()
     
     # Créer l'application
     app = Application.builder().token(BOT_TOKEN).build()
