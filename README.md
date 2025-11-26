@@ -20,7 +20,7 @@ Bot Telegram qui envoie des notifications push quand de nouveaux runs de modèle
 | `/modeles` | Choisir les modèles météo à suivre |
 | `/horaires` | Choisir les runs (00h, 06h, 12h, 18h) |
 | `/statut` | Voir ses abonnements actuels |
-| `/derniersruns` | Afficher les derniers runs disponibles |
+| `/derniers` | Afficher les derniers runs disponibles |
 | `/arreter` | Se désabonner des notifications |
 
 ## Modèles météo supportés
