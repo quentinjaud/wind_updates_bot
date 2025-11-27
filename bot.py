@@ -129,12 +129,12 @@ def count_logs_for_stats():
 
 
 def format_prochain_message(runs_by_model: dict, show_all: bool = False):
-    """Formate le message groupé par modèle (Option B)"""
+    """Formate le message groupé par modèle (Option A - format explicite)"""
     paris_tz = ZoneInfo('Europe/Paris')
     now = datetime.now(timezone.utc)
     
     if show_all:
-        message = "🔮 **Tous les prochains runs (24h)**\n\n"
+        message = "🔮 **Prochains runs (24h)**\n\n"
     else:
         message = "🔮 **Prochains runs (24h)**\n\n"
     
@@ -166,19 +166,22 @@ def format_prochain_message(runs_by_model: dict, show_all: bool = False):
             # Indicateur source
             source_icon = "📊" if has_stats else "⏱️"
             
-            message += f"• {run_hour:02d}h → {eta_paris:%H:%M} ({delay_str}) {source_icon}\n"
+            message += f"• Run {run_hour:02d} → dispo {eta_paris:%H:%M} ({delay_str}) {source_icon}\n"
         
         message += "\n"
     
-    # Footer
+    # Footer avec légende détaillée
     logs_count = count_logs_for_stats()
+    message += "💡 **Prédictions :**\n"
+    
     if logs_count >= 30:
-        message += f"💡 📊 = stats réelles ({logs_count} obs) • ⏱️ = estimation"
+        message += f"📊 Moyenne réelle ({logs_count} observations sur 30j)\n"
+    elif logs_count > 0:
+        message += f"📊 Moyenne réelle ({logs_count} observations)\n"
     else:
-        if logs_count > 0:
-            message += f"💡 Collecte en cours : {logs_count}/30 observations\n📊 = stats • ⏱️ = estimation"
-        else:
-            message += "💡 ⏱️ Estimations (collecte de stats en cours)"
+        message += "📊 Moyenne réelle (statistiques en cours)\n"
+    
+    message += "⏱️ Estimation (collecte en cours)"
     
     return message
 
@@ -211,7 +214,7 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
 📋 **Commandes :**
 /modeles — Choisir les modèles (AROME, GFS...)
 /horaires — Choisir quels runs recevoir
-/prochain — Prochains runs attendus (ETAs)
+/prochains — Prochains runs attendus (ETAs)
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
 /aide — Comprendre les runs météo
@@ -257,12 +260,12 @@ Un run "00h" utilise les observations de 00h UTC, mais le calcul prend du temps.
 Pour une nav le matin, consulte le run 00h dès qu'il sort (~04h).
 Pour une nav l'après-midi, attends le run 06h (~12h).
 
-🔮 **Nouveau :** Utilise /prochain pour voir quand les prochains runs sortiront !
+🔮 **Nouveau :** Utilise /prochains pour voir quand les prochains runs sortiront !
 
 📋 **Commandes :**
 /modeles — Choisir les modèles
 /horaires — Choisir quels runs recevoir
-/prochain — Prochains runs attendus (ETAs)
+/prochains — Prochains runs attendus (ETAs)
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
 /arreter — Se désabonner
@@ -411,8 +414,8 @@ async def derniers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait_msg.edit_text(text, parse_mode="Markdown")
 
 
-async def prochain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /prochain [tout] - Affiche les prochains runs attendus (V1.1)"""
+async def prochains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /prochains [tout] - Affiche les prochains runs attendus (V1.1)"""
     chat_id = update.message.chat.id
     user = get_user(chat_id)
     
@@ -478,11 +481,11 @@ async def prochain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     if show_all:
         keyboard.append([
-            InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochain_mine")
+            InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochains_mine")
         ])
     else:
         keyboard.append([
-            InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochain_all")
+            InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochains_all")
         ])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -657,8 +660,8 @@ _(Par défaut : 06h et 12h uniquement)_"""
     elif data == "cancel_stop":
         await query.edit_message_text("Désabonnement annulé. ✌️")
     
-    # ----- PROCHAIN : AFFICHER TOUT -----
-    elif data == "prochain_all":
+    # ----- PROCHAINS : AFFICHER TOUT -----
+    elif data == "prochains_all":
         user = get_user(chat_id)
         if not user:
             await query.answer("Tu dois être inscrit pour utiliser cette fonction.", show_alert=True)
@@ -699,13 +702,13 @@ _(Par défaut : 06h et 12h uniquement)_"""
         
         # Formatter et afficher avec bouton toggle
         message = format_prochain_message(runs_by_model, show_all)
-        keyboard = [[InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochain_mine")]]
+        keyboard = [[InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochains_mine")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(message, parse_mode="Markdown", reply_markup=reply_markup)
     
-    # ----- PROCHAIN : AFFICHER MES ABONNEMENTS -----
-    elif data == "prochain_mine":
+    # ----- PROCHAINS : AFFICHER MES ABONNEMENTS -----
+    elif data == "prochains_mine":
         user = get_user(chat_id)
         if not user:
             await query.answer("Tu dois être inscrit pour utiliser cette fonction.", show_alert=True)
@@ -746,7 +749,7 @@ _(Par défaut : 06h et 12h uniquement)_"""
         
         # Formatter et afficher avec bouton toggle
         message = format_prochain_message(runs_by_model, show_all)
-        keyboard = [[InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochain_all")]]
+        keyboard = [[InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochains_all")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(message, parse_mode="Markdown", reply_markup=reply_markup)
@@ -867,7 +870,7 @@ def main():
     app.add_handler(CommandHandler("aide", aide_command))
     app.add_handler(CommandHandler("modeles", modeles_command))
     app.add_handler(CommandHandler("horaires", horaires_command))
-    app.add_handler(CommandHandler("prochain", prochain_command))  # V1.1
+    app.add_handler(CommandHandler("prochains", prochains_command))  # V1.1
     app.add_handler(CommandHandler("statut", statut_command))
     app.add_handler(CommandHandler("derniers", derniers_command))
     app.add_handler(CommandHandler("arreter", arreter_command))
