@@ -5,9 +5,11 @@ V1.1 avec commande /prochain (prédiction ETAs)
 V1.1.2 avec commande /lol (blagues)
 V1.2 avec notifications admin (erreurs critiques + nouveaux users)
 V1.2.1 fix CallbackQuery.bot → context.bot
+V1.2.2 admin.py séparé + notification async
 """
 import logging
 import requests
+import asyncio
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -18,7 +20,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import BOT_TOKEN, MODELS, AVAILABLE_RUNS, ADMIN_CHAT_ID, DEFAULT_RUNS
+from config import BOT_TOKEN, MODELS, AVAILABLE_RUNS, DEFAULT_RUNS
 from database import (
     init_database,
     get_or_create_user,
@@ -30,13 +32,18 @@ from database import (
     update_user_runs,
     deactivate_user,
     reactivate_user,
-    count_active_users,
     get_next_run_eta,  # V1.1
     get_average_delay, # V1.1
     get_log_stats,     # V1.1
-    get_connection,    # V1.1
 )
 from checker import get_all_latest_runs, get_all_cached_runs, init_cache
+from admin import (
+    send_admin_notification,
+    admin_stats_command,
+    testnotif_command,
+    forcecheck_command,
+    count_logs_for_stats,
+)
 
 import sys
 
@@ -50,59 +57,6 @@ logger = logging.getLogger(__name__)
 
 # Réduire la verbosité de httpx (utilisé par telegram bot)
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
-# ============ SYSTÈME DE NOTIFICATIONS ADMIN (V1.2) ============
-
-# Throttling des notifications d'erreurs : {error_type: last_sent_timestamp}
-_admin_notif_throttle = {}
-ADMIN_THROTTLE_MINUTES = 10
-
-# Tracking users qui passent de 0 → 1+ modèles (nouvel user OU réabonnement)
-# {chat_id: {'username': str, 'timestamp': datetime}}
-_pending_new_users = {}
-PENDING_USER_TIMEOUT_MINUTES = 60  # 1 heure pour terminer config
-
-
-async def send_admin_notification(bot, message: str, error_type: str = "general"):
-    """
-    Envoie une notification à l'admin avec throttling.
-    
-    Args:
-        bot: Instance du bot Telegram
-        message: Message à envoyer
-        error_type: Type d'erreur pour le throttling (ex: "db_error", "api_timeout")
-    
-    Returns:
-        True si notif envoyée, False sinon
-    """
-    if not ADMIN_CHAT_ID or ADMIN_CHAT_ID == 0:
-        logger.warning("⚠️ ADMIN_CHAT_ID non configuré, notification ignorée")
-        return False
-    
-    # Vérifier throttling
-    now = datetime.now(timezone.utc)
-    last_sent = _admin_notif_throttle.get(error_type)
-    
-    if last_sent:
-        elapsed = (now - last_sent).total_seconds() / 60
-        if elapsed < ADMIN_THROTTLE_MINUTES:
-            logger.debug(f"Admin notif throttled: {error_type} (envoyée il y a {elapsed:.1f}min)")
-            return False
-    
-    # Envoyer notification
-    try:
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"🔔 **Admin Alert**\n\n{message}",
-            parse_mode="Markdown"
-        )
-        _admin_notif_throttle[error_type] = now
-        logger.info(f"✅ Admin notifié: {error_type}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Échec notification admin: {e}")
-        return False
 
 
 # ============ CONSTANTES POUR /PROCHAIN (V1.1) ============
@@ -186,7 +140,7 @@ def generate_aide_horaires() -> str:
         "ECMWF": {
             "emoji": "🇪🇺",
             "desc": "(Monde, référence)",
-            "runs": [0, 6, 12, 18]  # Tous les runs disponibles
+            "runs": [0, 6, 12, 18]
         }
     }
     
@@ -262,33 +216,18 @@ def get_eta_with_fallback(model: str, run_hour: int, run_datetime: datetime) -> 
     delay_minutes = FALLBACK_DELAYS.get(model, {}).get(run_hour)
     
     if delay_minutes is None:
-        # Run pas supporté pour ce modèle (ex: ECMWF 06h)
+        # Run pas supporté pour ce modèle
         return None, False
     
     return run_datetime + timedelta(minutes=delay_minutes), False
 
 
-def count_logs_for_stats():
-    """Compte le nombre total de logs disponibles"""
-    try:
-        conn = get_connection()
-        cursor = conn.execute("SELECT COUNT(*) FROM run_availability_log")
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
-    except:
-        return 0
-
-
 def format_prochain_message(runs_by_model: dict, show_all: bool = False):
-    """Formate le message groupé par modèle (Option A - format explicite)"""
+    """Formate le message groupé par modèle"""
     paris_tz = ZoneInfo('Europe/Paris')
     now = datetime.now(timezone.utc)
     
-    if show_all:
-        message = "🔮 **Prochains runs (24h)**\n\n"
-    else:
-        message = "🔮 **Prochains runs (24h)**\n\n"
+    message = "🔮 **Prochains runs (24h)**\n\n"
     
     if not runs_by_model:
         return "Aucun run prévu dans les 24 prochaines heures."
@@ -322,7 +261,7 @@ def format_prochain_message(runs_by_model: dict, show_all: bool = False):
         
         message += "\n"
     
-    # Footer avec légende détaillée
+    # Footer avec légende
     logs_count = count_logs_for_stats()
     message += "💡 **Prédictions :**\n"
     
@@ -586,7 +525,7 @@ async def derniers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def prochains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /prochains [tout] - Affiche les prochains runs attendus (V1.1)"""
+    """Commande /prochains [tout] - Affiche les prochains runs attendus"""
     chat_id = update.message.chat.id
     user = get_user(chat_id)
     
@@ -606,7 +545,7 @@ async def prochains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         models_to_check = user['models'] if user['models'] else list(MODELS.keys())
-        runs_to_check = user['runs'] if user['runs'] else [6, 12]  # Défaut jour
+        runs_to_check = user['runs'] if user['runs'] else [6, 12]
     
     # Message d'attente
     wait_msg = await update.message.reply_text("🔮 Calcul des prochains runs...")
@@ -626,7 +565,6 @@ async def prochains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = get_eta_with_fallback(model, run_hour, next_run_dt)
             
             if result[0] is None:
-                # Run non supporté pour ce modèle (ex: ECMWF 06h)
                 continue
             
             eta, has_stats = result
@@ -666,7 +604,7 @@ async def prochains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def lol_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /lol - Affiche une blague aléatoire (V1.1.2)"""
+    """Commande /lol - Affiche une blague aléatoire"""
     
     # Message d'attente
     wait_msg = await update.message.reply_text("😄 Cherche une blague...")
@@ -728,25 +666,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ----- TOGGLE MODÈLE -----
     if data.startswith("toggle_model_"):
         model = data.replace("toggle_model_", "")
-        
-        # V1.2: Détecter passage 0 → 1+ modèles (nouvel user OU user qui se réabonne)
-        models_before = get_user_models(chat_id)
-        had_no_models = len(models_before) == 0
-        
         toggle_model_for_user(chat_id, model)
-        
-        # Si c'était le premier modèle activé, tracker pour notif admin
-        if had_no_models:
-            models_after = get_user_models(chat_id)
-            if len(models_after) > 0:  # Confirmer que toggle a ajouté un modèle
-                user = get_user(chat_id)
-                username = user.get('username') if user else None
-                
-                # Ajouter au dict pour notif admin au "Terminé"
-                _pending_new_users[chat_id] = {
-                    'username': username,
-                    'timestamp': datetime.now(timezone.utc)
-                }
         
         # Reconstruire le clavier avec le nouvel état
         user_models = get_user_models(chat_id)
@@ -831,19 +751,16 @@ _(Par défaut : 06h et 12h uniquement)_"""
     elif data == "done_models":
         models = get_user_models(chat_id)
         
-        # V1.2: Notifier admin si user passe de 0 → 1+ modèles (nouveau OU réabonnement)
-        if chat_id in _pending_new_users and models:
-            user_data = _pending_new_users[chat_id]
-            now = datetime.now(timezone.utc)
-            elapsed_minutes = (now - user_data['timestamp']).total_seconds() / 60
+        # V1.2.2: Notification admin async (fire-and-forget)
+        # Vérifier si c'est un nouvel user (0 modèles avant, 1+ après)
+        if models:
+            user = get_user(chat_id)
+            username = user.get('username') if user else None
+            models_str = ", ".join(models)
             
-            # Envoyer notif admin si < 60 minutes
-            if elapsed_minutes < PENDING_USER_TIMEOUT_MINUTES:
-                username = user_data['username']
-                models_str = ", ".join(models)
-                
-                # FIX V1.2.1: Utiliser context.bot au lieu de query.bot
-                await send_admin_notification(
+            # Lancer notification en arrière-plan (non-bloquant)
+            asyncio.create_task(
+                send_admin_notification(
                     context.bot,
                     f"👤 **Utilisateur actif**\n\n"
                     f"Chat ID: `{chat_id}`\n"
@@ -851,10 +768,9 @@ _(Par défaut : 06h et 12h uniquement)_"""
                     f"Modèles: {models_str}",
                     error_type="new_user"
                 )
-            
-            # Retirer du dict (même si expiré)
-            del _pending_new_users[chat_id]
+            )
         
+        # Répondre immédiatement à l'user (pas d'attente)
         if models:
             models_str = ", ".join(models)
             await query.edit_message_text(
@@ -914,7 +830,6 @@ _(Par défaut : 06h et 12h uniquement)_"""
         # Tous les modèles et runs
         models_to_check = list(MODELS.keys())
         runs_to_check = [0, 6, 12, 18]
-        show_all = True
         
         # Recalculer les runs
         now = datetime.now(timezone.utc)
@@ -945,7 +860,7 @@ _(Par défaut : 06h et 12h uniquement)_"""
                 runs_by_model[model] = model_runs
         
         # Formatter et afficher avec bouton toggle
-        message = format_prochain_message(runs_by_model, show_all)
+        message = format_prochain_message(runs_by_model, True)
         keyboard = [[InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochains_mine")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -961,7 +876,6 @@ _(Par défaut : 06h et 12h uniquement)_"""
         # Seulement les modèles/runs suivis
         models_to_check = user['models'] if user['models'] else list(MODELS.keys())
         runs_to_check = user['runs'] if user['runs'] else [6, 12]
-        show_all = False
         
         # Recalculer les runs
         now = datetime.now(timezone.utc)
@@ -992,7 +906,7 @@ _(Par défaut : 06h et 12h uniquement)_"""
                 runs_by_model[model] = model_runs
         
         # Formatter et afficher avec bouton toggle
-        message = format_prochain_message(runs_by_model, show_all)
+        message = format_prochain_message(runs_by_model, False)
         keyboard = [[InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochains_all")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1035,61 +949,6 @@ def build_horaires_keyboard(user_runs: list) -> list:
     return keyboard
 
 
-# ============ ADMIN ============
-
-async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /stats - Stats admin (toi uniquement)"""
-    chat_id = update.message.chat.id
-    
-    if chat_id != ADMIN_CHAT_ID:
-        await update.message.reply_text("Commande réservée à l'admin.")
-        return
-    
-    total_users = count_active_users()
-    logs_count = count_logs_for_stats()
-    
-    stats_text = f"""
-📈 **Stats Admin**
-
-👥 Utilisateurs actifs : {total_users}
-📊 Logs disponibilité : {logs_count}
-    """
-    
-    await update.message.reply_text(stats_text, parse_mode="Markdown")
-
-
-async def testnotif_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /testnotif - Envoie une notification de test (admin only)"""
-    chat_id = update.message.chat.id
-    
-    if chat_id != ADMIN_CHAT_ID:
-        return
-    
-    from scheduler import send_notification
-    
-    # Simuler une notification pour le run 12h d'aujourd'hui
-    fake_run = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
-    
-    await update.message.reply_text("📤 Envoi d'une notification de test...")
-    await send_notification(context.bot, chat_id, "AROME", fake_run)
-    await update.message.reply_text("✅ Notification de test envoyée")
-
-
-async def forcecheck_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Commande /forcecheck - Force une vérification immédiate (admin only)"""
-    chat_id = update.message.chat.id
-    
-    if chat_id != ADMIN_CHAT_ID:
-        return
-    
-    await update.message.reply_text("🔍 Vérification des modèles en cours...")
-    
-    from scheduler import check_all_models
-    await check_all_models(context.bot)
-    
-    await update.message.reply_text("✅ Vérification terminée. Regarde les logs pour les détails.")
-
-
 # ============ MAIN ============
 
 def main():
@@ -1100,10 +959,6 @@ def main():
         print("❌ TELEGRAM_BOT_TOKEN non défini")
         return
     
-    # Vérifier ADMIN_CHAT_ID
-    if not ADMIN_CHAT_ID or ADMIN_CHAT_ID == 0:
-        logger.warning("⚠️ ADMIN_CHAT_ID non configuré - notifications admin désactivées")
-    
     # Initialiser la base de données
     init_database()
     
@@ -1113,15 +968,15 @@ def main():
     # Créer l'application
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Ajouter les handlers de commandes (en français)
+    # Ajouter les handlers de commandes
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("aide", aide_command))
     app.add_handler(CommandHandler("modeles", modeles_command))
     app.add_handler(CommandHandler("horaires", horaires_command))
-    app.add_handler(CommandHandler("prochains", prochains_command))  # V1.1
+    app.add_handler(CommandHandler("prochains", prochains_command))
     app.add_handler(CommandHandler("statut", statut_command))
     app.add_handler(CommandHandler("derniers", derniers_command))
-    app.add_handler(CommandHandler("lol", lol_command))  # V1.1.2
+    app.add_handler(CommandHandler("lol", lol_command))
     app.add_handler(CommandHandler("arreter", arreter_command))
     
     # Commandes admin
