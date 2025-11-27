@@ -72,7 +72,9 @@ FALLBACK_DELAYS = {
     },
     "ECMWF": {
         0: 540,   # 9h00 → dispo ~09h00 Paris
+        6: 300,   # 5h00 → dispo ~11h00 Paris
         12: 540,  # 9h00 → dispo ~21h00 Paris
+        18: 300,  # 5h00 → dispo ~23h00 Paris
     }
 }
 
@@ -127,7 +129,7 @@ def generate_aide_horaires() -> str:
         "ECMWF": {
             "emoji": "🇪🇺",
             "desc": "(Monde, référence)",
-            "runs": [0, 12]  # Seulement 00 et 12
+            "runs": [0, 6, 12, 18]  # Tous les runs disponibles
         }
     }
     

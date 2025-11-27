@@ -418,18 +418,25 @@ def get_expected_gfs_run(current_time: datetime) -> datetime | None:
 def check_ecmwf_file_exists(run_datetime: datetime) -> bool:
     """
     Vérifie si un run ECMWF existe sur le serveur de données ouvertes.
+    
+    ECMWF utilise des streams différents selon le run :
+    - 00z et 12z : stream "oper" (runs principaux, échéances 0-360h)
+    - 06z et 18z : stream "scda" (runs courts, échéances 0-144h)
     """
     try:
         date_str = run_datetime.strftime("%Y%m%d")
         hour_str = run_datetime.strftime("%H")
         
+        # Sélectionner le bon stream selon l'heure du run
+        stream = "scda" if run_datetime.hour in [6, 18] else "oper"
+        
         # URL du serveur ECMWF open data
-        url = f"https://data.ecmwf.int/forecasts/{date_str}/{hour_str}z/ifs/0p25/oper/"
+        url = f"https://data.ecmwf.int/forecasts/{date_str}/{hour_str}z/ifs/0p25/{stream}/"
         
         response = requests.head(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
         
         if response.status_code == 200:
-            logger.debug(f"ECMWF run {run_datetime} disponible")
+            logger.debug(f"ECMWF run {run_datetime} disponible (stream: {stream})")
             return True
         
         return False
@@ -469,8 +476,11 @@ def get_latest_ecmwf_run(use_cache: bool = True) -> datetime | None:
             if run_time > current_time:
                 continue
             
-            # ECMWF dispo ~8h après le run
-            expected_availability = run_time + timedelta(hours=8)
+            # ECMWF dispo avec délais variables selon le run
+            # 00z/12z : ~9h (runs longs 360h)
+            # 06z/18z : ~5h (runs courts 144h)
+            delay_hours = 5 if run_hour in [6, 18] else 9
+            expected_availability = run_time + timedelta(hours=delay_hours)
             if current_time < expected_availability:
                 continue
             
