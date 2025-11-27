@@ -4,6 +4,7 @@ Bot Telegram qui prévient quand les runs météo sont disponibles
 V1.1 avec commande /prochain (prédiction ETAs)
 V1.1.2 avec commande /lol (blagues)
 V1.2 avec notifications admin (erreurs critiques + nouveaux users)
+V1.2.1 fix CallbackQuery.bot → context.bot
 """
 import logging
 import requests
@@ -841,15 +842,15 @@ _(Par défaut : 06h et 12h uniquement)_"""
                 username = user_data['username']
                 models_str = ", ".join(models)
                 
-                if query.bot:
-                    await send_admin_notification(
-                        query.bot,
-                        f"👤 **Utilisateur actif**\n\n"
-                        f"Chat ID: `{chat_id}`\n"
-                        f"Username: @{username or 'N/A'}\n"
-                        f"Modèles: {models_str}",
-                        error_type="new_user"
-                    )
+                # FIX V1.2.1: Utiliser context.bot au lieu de query.bot
+                await send_admin_notification(
+                    context.bot,
+                    f"👤 **Utilisateur actif**\n\n"
+                    f"Chat ID: `{chat_id}`\n"
+                    f"Username: @{username or 'N/A'}\n"
+                    f"Modèles: {models_str}",
+                    error_type="new_user"
+                )
             
             # Retirer du dict (même si expiré)
             del _pending_new_users[chat_id]
