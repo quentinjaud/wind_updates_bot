@@ -1,6 +1,6 @@
 """
 Scheduler pour la vérification périodique des runs météo
-Wind Bot
+Wind Bot - V1.1 avec logging des disponibilités
 """
 import logging
 import asyncio
@@ -12,6 +12,8 @@ from database import (
     save_last_run,
     is_new_run,
     get_subscribed_users,
+    log_run_availability,  # V1.1
+    cleanup_old_logs,       # V1.1
 )
 from checker import check_model_availability, get_expected_run
 
@@ -19,6 +21,15 @@ logger = logging.getLogger(__name__)
 
 # Intervalle entre les vérifications (en secondes)
 CHECK_INTERVAL = 15 * 60  # 15 minutes
+
+
+def should_cleanup():
+    """
+    Détermine si on doit faire le cleanup des logs.
+    Retourne True une fois par an (1er janvier à 3h du matin UTC).
+    """
+    now = datetime.now(timezone.utc)
+    return now.month == 1 and now.day == 1 and now.hour == 3 and now.minute < 15
 
 
 async def send_notification(bot, chat_id: int, model: str, run_datetime: datetime):
@@ -91,6 +102,8 @@ async def check_and_notify(bot, model: str):
         return
     
     # Nouveau run disponible !
+    detected_at = datetime.now(timezone.utc)  # V1.1: timestamp de détection
+    
     logger.info(f"✅ {model}: nouveau run {expected_run} détecté !")
     
     # Récupérer les utilisateurs abonnés
@@ -111,6 +124,9 @@ async def check_and_notify(bot, model: str):
     
     logger.info(f"{model}: {success_count}/{len(subscribed_users)} notifications envoyées")
     
+    # V1.1: Logger la disponibilité du run
+    log_run_availability(model, expected_run, detected_at)
+    
     # Marquer le run comme notifié
     save_last_run(model, expected_run)
 
@@ -129,6 +145,11 @@ async def check_all_models(bot):
         
         # Petite pause entre les modèles
         await asyncio.sleep(1)
+    
+    # V1.1: Cleanup annuel des logs
+    if should_cleanup():
+        deleted = cleanup_old_logs(days=365)
+        logger.info(f"🧹 Cleanup annuel effectué : {deleted} logs supprimés")
     
     logger.info("✅ Fin vérification des modèles")
 

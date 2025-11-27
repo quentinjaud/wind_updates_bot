@@ -5,7 +5,7 @@ import sqlite3
 import json
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Configuration du chemin de la base de données
 # Par défaut : répertoire courant
@@ -41,6 +41,13 @@ def check_persistence():
             runs_count = conn.execute("SELECT COUNT(*) FROM last_runs").fetchone()[0]
             logger.info(f"🔍 PERSISTENCE CHECK - Users: {user_count}, Last runs: {runs_count}")
             
+            # Compter les logs si la table existe
+            try:
+                logs_count = conn.execute("SELECT COUNT(*) FROM run_availability_log").fetchone()[0]
+                logger.info(f"📊 Availability logs: {logs_count}")
+            except sqlite3.OperationalError:
+                pass
+            
             if user_count == 0 and runs_count == 0:
                 logger.warning("⚠️  Database is empty - might not be persisted between deploys!")
             else:
@@ -60,6 +67,7 @@ def init_database():
     
     conn = get_connection()
     
+    # Table users
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             chat_id INTEGER PRIMARY KEY,
@@ -72,6 +80,7 @@ def init_database():
         )
     """)
     
+    # Table last_runs
     conn.execute("""
         CREATE TABLE IF NOT EXISTS last_runs (
             model TEXT PRIMARY KEY,
@@ -80,7 +89,22 @@ def init_database():
         )
     """)
     
+    # Table run_availability_log (NOUVEAU - V1.1)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS run_availability_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model TEXT NOT NULL,
+            run_hour INTEGER NOT NULL,
+            run_date TEXT NOT NULL,
+            detected_at TEXT NOT NULL,
+            delay_minutes INTEGER NOT NULL,
+            CONSTRAINT unique_detection UNIQUE(model, run_date, run_hour)
+        )
+    """)
+    
+    # Index
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(active)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_log_stats ON run_availability_log(model, run_hour, run_date DESC)")
     
     conn.commit()
     conn.close()
@@ -319,3 +343,185 @@ def is_new_run(model: str, run_datetime: datetime) -> bool:
         run_datetime = run_datetime.replace(tzinfo=timezone.utc)
     
     return run_datetime > last
+
+
+# ============ RUN AVAILABILITY LOGGING (V1.1) ============
+
+def log_run_availability(model: str, run_datetime: datetime, detected_at: datetime):
+    """
+    Log la disponibilité d'un run avec son délai.
+    
+    Args:
+        model: Nom du modèle (AROME, ARPEGE, GFS, ECMWF)
+        run_datetime: Datetime du run (ex: 2025-11-27 12:00:00 UTC)
+        detected_at: Datetime de détection (ex: 2025-11-27 16:45:23 UTC)
+    """
+    if run_datetime.tzinfo is None:
+        run_datetime = run_datetime.replace(tzinfo=timezone.utc)
+    if detected_at.tzinfo is None:
+        detected_at = detected_at.replace(tzinfo=timezone.utc)
+    
+    run_hour = run_datetime.hour
+    run_date = run_datetime.date().isoformat()
+    
+    # Calculer délai en minutes (arrondi)
+    delay = detected_at - run_datetime
+    delay_minutes = round(delay.total_seconds() / 60)
+    
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO run_availability_log 
+            (model, run_hour, run_date, detected_at, delay_minutes)
+            VALUES (?, ?, ?, ?, ?)
+        """, (model, run_hour, run_date, detected_at.isoformat(), delay_minutes))
+        conn.commit()
+        logger.info(f"📊 {model} {run_hour:02d}h logged: +{delay_minutes} min")
+    except sqlite3.IntegrityError:
+        # Doublon (redémarrage ou détection multiple) : ignorer silencieusement
+        pass
+    finally:
+        conn.close()
+
+
+def get_average_delay(model: str, run_hour: int, days: int = 30) -> int | None:
+    """
+    Calcule le délai moyen en minutes pour un couple (modèle, run).
+    
+    Args:
+        model: Nom du modèle
+        run_hour: Heure du run (0, 6, 12, 18)
+        days: Nombre de jours d'historique à considérer (défaut: 30)
+    
+    Returns:
+        Délai moyen en minutes, ou None si pas assez de données
+    """
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    
+    conn = get_connection()
+    cursor = conn.execute("""
+        SELECT AVG(delay_minutes), COUNT(*) 
+        FROM run_availability_log
+        WHERE model = ? AND run_hour = ? AND run_date >= ?
+    """, (model, run_hour, cutoff_date))
+    
+    result = cursor.fetchone()
+    conn.close()
+    
+    avg_delay = result[0]
+    count = result[1]
+    
+    # Nécessite au moins 3 observations pour être fiable
+    if count < 3:
+        return None
+    
+    return round(avg_delay) if avg_delay else None
+
+
+def get_next_run_eta(model: str, run_hour: int, run_date: datetime) -> datetime | None:
+    """
+    Prédit l'heure de disponibilité d'un run basé sur l'historique.
+    
+    Args:
+        model: Nom du modèle
+        run_hour: Heure du run (0, 6, 12, 18)
+        run_date: Date du run (avec tzinfo UTC)
+    
+    Returns:
+        Datetime prédit de disponibilité, ou None si pas assez de données
+    """
+    avg_delay = get_average_delay(model, run_hour, days=30)
+    
+    if avg_delay is None:
+        return None
+    
+    # Construire le datetime du run
+    if run_date.tzinfo is None:
+        run_date = run_date.replace(tzinfo=timezone.utc)
+    
+    run_datetime = run_date.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+    
+    # Ajouter le délai moyen
+    eta = run_datetime + timedelta(minutes=avg_delay)
+    
+    return eta
+
+
+def get_log_stats(model: str, run_hour: int, days: int = 30) -> dict | None:
+    """
+    Retourne des statistiques détaillées sur un couple (modèle, run).
+    
+    Returns:
+        {
+            'count': int,           # Nombre d'observations
+            'avg_delay': int,       # Délai moyen (minutes)
+            'min_delay': int,       # Délai minimum
+            'max_delay': int,       # Délai maximum
+            'last_delay': int       # Dernier délai observé
+        }
+        ou None si pas de données
+    """
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    
+    conn = get_connection()
+    cursor = conn.execute("""
+        SELECT 
+            COUNT(*) as count,
+            AVG(delay_minutes) as avg_delay,
+            MIN(delay_minutes) as min_delay,
+            MAX(delay_minutes) as max_delay
+        FROM run_availability_log
+        WHERE model = ? AND run_hour = ? AND run_date >= ?
+    """, (model, run_hour, cutoff_date))
+    
+    result = cursor.fetchone()
+    
+    # Récupérer le dernier délai
+    cursor2 = conn.execute("""
+        SELECT delay_minutes
+        FROM run_availability_log
+        WHERE model = ? AND run_hour = ?
+        ORDER BY run_date DESC, detected_at DESC
+        LIMIT 1
+    """, (model, run_hour))
+    
+    last_result = cursor2.fetchone()
+    conn.close()
+    
+    if result["count"] == 0:
+        return None
+    
+    return {
+        "count": result["count"],
+        "avg_delay": round(result["avg_delay"]) if result["avg_delay"] else 0,
+        "min_delay": result["min_delay"],
+        "max_delay": result["max_delay"],
+        "last_delay": last_result["delay_minutes"] if last_result else None
+    }
+
+
+def cleanup_old_logs(days: int = 365):
+    """
+    Supprime les logs plus vieux que X jours.
+    
+    Args:
+        days: Nombre de jours à garder (défaut: 365 = 1 an)
+    
+    Returns:
+        Nombre de logs supprimés
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    
+    conn = get_connection()
+    cursor = conn.execute(
+        "DELETE FROM run_availability_log WHERE run_date < ?", 
+        (cutoff,)
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    
+    if deleted > 0:
+        logger.info(f"🧹 Cleanup: {deleted} logs supprimés (>{days} jours)")
+    
+    return deleted
