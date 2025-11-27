@@ -28,6 +28,8 @@ from database import (
     reactivate_user,
     count_active_users,
     get_next_run_eta,  # V1.1
+    get_average_delay, # V1.1
+    get_log_stats,     # V1.1
     get_connection,    # V1.1
 )
 from checker import get_all_latest_runs, get_all_cached_runs, init_cache
@@ -83,6 +85,97 @@ EMOJI_MAP = {
 
 
 # ============ FONCTIONS HELPER POUR /PROCHAIN (V1.1) ============
+
+def round_to_quarter_hour(hour_decimal: float) -> str:
+    """Arrondit une heure décimale au quart d'heure le plus proche"""
+    hours = int(hour_decimal)
+    minutes = (hour_decimal - hours) * 60
+    
+    # Arrondir au quart d'heure (0, 15, 30, 45)
+    rounded_minutes = round(minutes / 15) * 15
+    
+    # Gérer le cas où on arrondit à 60
+    if rounded_minutes == 60:
+        hours += 1
+        rounded_minutes = 0
+    
+    # Gérer le dépassement 24h
+    hours = hours % 24
+    
+    return f"{hours:02d}h{rounded_minutes:02d}"
+
+
+def generate_aide_horaires() -> str:
+    """Génère la section horaires de /aide avec stats dynamiques"""
+    
+    models_info = {
+        "AROME": {
+            "emoji": "⛵",
+            "desc": "(France, très précis)",
+            "runs": [0, 6, 12, 18]
+        },
+        "ARPEGE": {
+            "emoji": "🌍",
+            "desc": "(Europe/Monde)",
+            "runs": [0, 6, 12, 18]
+        },
+        "GFS": {
+            "emoji": "🌎",
+            "desc": "(Monde, américain)",
+            "runs": [0, 6, 12, 18]
+        },
+        "ECMWF": {
+            "emoji": "🇪🇺",
+            "desc": "(Monde, référence)",
+            "runs": [0, 12]  # Seulement 00 et 12
+        }
+    }
+    
+    result = ""
+    has_any_stats = False
+    has_any_estimates = False
+    
+    for model, info in models_info.items():
+        result += f"\n**{model}** {info['emoji']} {info['desc']} :\n"
+        
+        for run_hour in info['runs']:
+            # Essayer de récupérer les stats
+            stats = get_log_stats(model, run_hour, days=30)
+            
+            if stats and stats['count'] >= 3:
+                # Stats disponibles
+                avg_delay = stats['avg_delay']
+                count = stats['count']
+                
+                # Calculer heure de dispo (run_hour + délai)
+                dispo_hour = run_hour + (avg_delay / 60)
+                dispo_str = round_to_quarter_hour(dispo_hour)
+                
+                result += f"• Run {run_hour:02d}h → dispo vers {dispo_str} 📊 ({count} obs)\n"
+                has_any_stats = True
+            else:
+                # Fallback hardcodé
+                delay = FALLBACK_DELAYS.get(model, {}).get(run_hour)
+                
+                if delay is not None:
+                    dispo_hour = run_hour + (delay / 60)
+                    dispo_str = round_to_quarter_hour(dispo_hour)
+                    result += f"• Run {run_hour:02d}h → dispo vers {dispo_str} ⏱️\n"
+                    has_any_estimates = True
+    
+    # Footer explicatif
+    result += "\n"
+    if has_any_stats and has_any_estimates:
+        result += "📊 = Délais moyens observés • ⏱️ = Estimations"
+    elif has_any_stats:
+        result += "📊 = Délais moyens observés (30 derniers jours)"
+    else:
+        result += "⏱️ = Estimations (collecte de stats en cours)"
+    
+    return result
+
+
+# ============ FONCTIONS HELPER POUR /PROCHAINS (V1.1) ============
 
 def calculate_next_run(now: datetime, run_hour: int) -> datetime:
     """Calcule le prochain run_datetime pour une heure donnée"""
@@ -228,7 +321,10 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
 async def aide_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Commande /aide - Explique le fonctionnement des modèles météo"""
     
-    aide_text = """
+    # Générer les horaires dynamiquement (avec stats si disponibles)
+    horaires_section = generate_aide_horaires()
+    
+    aide_text = f"""
 📚 **Comment ça marche ?**
 
 Les modèles météo (AROME, GFS...) calculent des prévisions plusieurs fois par jour. Chaque calcul s'appelle un **run**.
@@ -237,24 +333,7 @@ Les modèles météo (AROME, GFS...) calculent des prévisions plusieurs fois pa
 Un run "00h" utilise les observations de 00h UTC, mais le calcul prend du temps. Il sort donc quelques heures plus tard.
 
 ⏰ **Horaires de disponibilité (heure de Paris) :**
-
-**AROME** ⛵ (France, très précis) :
-• Run 00h → dispo vers 03h45
-• Run 06h → dispo vers 12h10
-• Run 12h → dispo vers 16h55
-• Run 18h → dispo vers 00h10
-
-**ARPEGE** 🌍 (Europe/Monde) :
-• Run 00h → dispo vers 04h50
-• Run 06h → dispo vers 11h35
-• Run 12h → dispo vers 16h25
-• Run 18h → dispo vers 23h35
-
-**GFS** 🌎 (Monde, américain) :
-• Runs 00h/06h/12h/18h → dispo 4-5h après
-
-**ECMWF** 🇪🇺 (Monde, référence) :
-• Runs 00h/06h/12h/18h → dispo 8-10h après
+{horaires_section}
 
 💡 **Conseil nav :**
 Pour une nav le matin, consulte le run 00h dès qu'il sort (~04h).
