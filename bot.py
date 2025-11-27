@@ -215,6 +215,7 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
 /aide — Comprendre les runs météo
+/arreter — Se désabonner
     """
     
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
@@ -470,9 +471,24 @@ async def prochain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if model_runs:
             runs_by_model[model] = model_runs
     
-    # Formatter et envoyer
+    # Formatter le message
     message = format_prochain_message(runs_by_model, show_all)
-    await wait_msg.edit_text(message, parse_mode="Markdown")
+    
+    # Ajouter bouton toggle
+    keyboard = []
+    if show_all:
+        keyboard.append([
+            InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochain_mine")
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochain_all")
+        ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Envoyer avec bouton
+    await wait_msg.edit_text(message, parse_mode="Markdown", reply_markup=reply_markup)
 
 
 async def arreter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -640,6 +656,100 @@ _(Par défaut : 06h et 12h uniquement)_"""
     # ----- ANNULER STOP -----
     elif data == "cancel_stop":
         await query.edit_message_text("Désabonnement annulé. ✌️")
+    
+    # ----- PROCHAIN : AFFICHER TOUT -----
+    elif data == "prochain_all":
+        user = get_user(chat_id)
+        if not user:
+            await query.answer("Tu dois être inscrit pour utiliser cette fonction.", show_alert=True)
+            return
+        
+        # Tous les modèles et runs
+        models_to_check = list(MODELS.keys())
+        runs_to_check = [0, 6, 12, 18]
+        show_all = True
+        
+        # Recalculer les runs
+        now = datetime.now(timezone.utc)
+        runs_by_model = {}
+        
+        for model in models_to_check:
+            model_runs = []
+            
+            for run_hour in runs_to_check:
+                next_run_dt = calculate_next_run(now, run_hour)
+                result = get_eta_with_fallback(model, run_hour, next_run_dt)
+                
+                if result[0] is None:
+                    continue
+                
+                eta, has_stats = result
+                
+                if now < eta < now + timedelta(hours=24):
+                    model_runs.append({
+                        'run_hour': run_hour,
+                        'eta': eta,
+                        'has_stats': has_stats
+                    })
+            
+            model_runs.sort(key=lambda x: x['eta'])
+            
+            if model_runs:
+                runs_by_model[model] = model_runs
+        
+        # Formatter et afficher avec bouton toggle
+        message = format_prochain_message(runs_by_model, show_all)
+        keyboard = [[InlineKeyboardButton("👤 Voir mes abonnements", callback_data="prochain_mine")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+    
+    # ----- PROCHAIN : AFFICHER MES ABONNEMENTS -----
+    elif data == "prochain_mine":
+        user = get_user(chat_id)
+        if not user:
+            await query.answer("Tu dois être inscrit pour utiliser cette fonction.", show_alert=True)
+            return
+        
+        # Seulement les modèles/runs suivis
+        models_to_check = user['models'] if user['models'] else list(MODELS.keys())
+        runs_to_check = user['runs'] if user['runs'] else [6, 12]
+        show_all = False
+        
+        # Recalculer les runs
+        now = datetime.now(timezone.utc)
+        runs_by_model = {}
+        
+        for model in models_to_check:
+            model_runs = []
+            
+            for run_hour in runs_to_check:
+                next_run_dt = calculate_next_run(now, run_hour)
+                result = get_eta_with_fallback(model, run_hour, next_run_dt)
+                
+                if result[0] is None:
+                    continue
+                
+                eta, has_stats = result
+                
+                if now < eta < now + timedelta(hours=24):
+                    model_runs.append({
+                        'run_hour': run_hour,
+                        'eta': eta,
+                        'has_stats': has_stats
+                    })
+            
+            model_runs.sort(key=lambda x: x['eta'])
+            
+            if model_runs:
+                runs_by_model[model] = model_runs
+        
+        # Formatter et afficher avec bouton toggle
+        message = format_prochain_message(runs_by_model, show_all)
+        keyboard = [[InlineKeyboardButton("🌍 Voir tous les modèles", callback_data="prochain_all")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode="Markdown", reply_markup=reply_markup)
 
 
 def build_horaires_keyboard(user_runs: list) -> list:
