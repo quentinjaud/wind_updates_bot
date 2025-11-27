@@ -73,7 +73,7 @@ def init_database():
             chat_id INTEGER PRIMARY KEY,
             username TEXT,
             models TEXT DEFAULT '[]',
-            runs TEXT DEFAULT '[]',
+            runs TEXT DEFAULT '[6, 12]',
             active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             last_notification TEXT
@@ -139,10 +139,14 @@ def get_user(chat_id: int) -> dict | None:
 
 def create_user(chat_id: int, username: str = None) -> dict:
     """Crée un nouvel utilisateur"""
+    from config import DEFAULT_RUNS  # Import local pour éviter circular import
+    
     conn = get_connection()
+    
+    # Insérer avec runs par défaut explicites (double sécurité)
     conn.execute(
-        "INSERT OR IGNORE INTO users (chat_id, username) VALUES (?, ?)",
-        (chat_id, username)
+        "INSERT OR IGNORE INTO users (chat_id, username, runs) VALUES (?, ?, ?)",
+        (chat_id, username, json.dumps(DEFAULT_RUNS))
     )
     conn.commit()
     conn.close()
