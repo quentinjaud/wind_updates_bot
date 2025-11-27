@@ -57,6 +57,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 _admin_notif_throttle = {}
 ADMIN_THROTTLE_MINUTES = 10
 
+# Tracking users qui passent de 0 → 1+ modèles (nouvel user OU réabonnement)
+# {chat_id: {'username': str, 'timestamp': datetime}}
+_pending_new_users = {}
+PENDING_USER_TIMEOUT_MINUTES = 60  # 1 heure pour terminer config
+
 
 async def send_admin_notification(bot, message: str, error_type: str = "general"):
     """
@@ -375,14 +380,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Si user existait et était inactif, le réactiver
     if not user["active"]:
         reactivate_user(chat_id)
-    
-    # V1.2: Notifier admin si nouvel utilisateur
-    if is_new_user and context.application.bot:
-        await send_admin_notification(
-            context.application.bot,
-            f"👤 **Nouvel utilisateur inscrit**\n\nChat ID: `{chat_id}`\nUsername: @{username or 'N/A'}",
-            error_type="new_user"
-        )
     
     welcome_text = """
 🌊 **Bienvenue sur Wind Bot !**
@@ -730,7 +727,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ----- TOGGLE MODÈLE -----
     if data.startswith("toggle_model_"):
         model = data.replace("toggle_model_", "")
+        
+        # V1.2: Détecter passage 0 → 1+ modèles (nouvel user OU user qui se réabonne)
+        models_before = get_user_models(chat_id)
+        had_no_models = len(models_before) == 0
+        
         toggle_model_for_user(chat_id, model)
+        
+        # Si c'était le premier modèle activé, tracker pour notif admin
+        if had_no_models:
+            models_after = get_user_models(chat_id)
+            if len(models_after) > 0:  # Confirmer que toggle a ajouté un modèle
+                user = get_user(chat_id)
+                username = user.get('username') if user else None
+                
+                # Ajouter au dict pour notif admin au "Terminé"
+                _pending_new_users[chat_id] = {
+                    'username': username,
+                    'timestamp': datetime.now(timezone.utc)
+                }
         
         # Reconstruire le clavier avec le nouvel état
         user_models = get_user_models(chat_id)
@@ -814,6 +829,31 @@ _(Par défaut : 06h et 12h uniquement)_"""
     # ----- TERMINÉ MODÈLES -----
     elif data == "done_models":
         models = get_user_models(chat_id)
+        
+        # V1.2: Notifier admin si user passe de 0 → 1+ modèles (nouveau OU réabonnement)
+        if chat_id in _pending_new_users and models:
+            user_data = _pending_new_users[chat_id]
+            now = datetime.now(timezone.utc)
+            elapsed_minutes = (now - user_data['timestamp']).total_seconds() / 60
+            
+            # Envoyer notif admin si < 60 minutes
+            if elapsed_minutes < PENDING_USER_TIMEOUT_MINUTES:
+                username = user_data['username']
+                models_str = ", ".join(models)
+                
+                if query.bot:
+                    await send_admin_notification(
+                        query.bot,
+                        f"👤 **Utilisateur actif**\n\n"
+                        f"Chat ID: `{chat_id}`\n"
+                        f"Username: @{username or 'N/A'}\n"
+                        f"Modèles: {models_str}",
+                        error_type="new_user"
+                    )
+            
+            # Retirer du dict (même si expiré)
+            del _pending_new_users[chat_id]
+        
         if models:
             models_str = ", ".join(models)
             await query.edit_message_text(
