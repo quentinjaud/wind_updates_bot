@@ -82,8 +82,10 @@ Plus besoin de rafraîchir obsessivement ton site météo préféré. ⛵
 
 Pourquoi les plongeurs plongent-ils toujours en arrière ?
 
-||Parce que sinon ils tombent dans le bateau||
+[SPOILER - Cliquer pour révéler]
 ```
+
+La réponse est cachée derrière un spoiler (zone grisée) que tu cliques pour révéler.
 
 ---
 

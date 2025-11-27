@@ -624,15 +624,15 @@ async def lol_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     blague, reponse = result
     
-    # Formatter le message
+    # Formatter le message en HTML (pour supporter les spoilers)
     if reponse:
-        # Blague avec question/réponse
-        message = f"😂 **Blague du jour :**\n\n{blague}\n\n||{reponse}||"
+        # Blague avec question/réponse (spoiler pour la réponse)
+        message = f"😂 <b>Blague du jour :</b>\n\n{blague}\n\n<tg-spoiler>{reponse}</tg-spoiler>"
     else:
         # Blague simple
-        message = f"😂 **Blague du jour :**\n\n{blague}"
+        message = f"😂 <b>Blague du jour :</b>\n\n{blague}"
     
-    await wait_msg.edit_text(message, parse_mode="Markdown")
+    await wait_msg.edit_text(message, parse_mode="HTML")
     logger.info(f"Blague envoyée à {update.message.chat.id}")
 
 
