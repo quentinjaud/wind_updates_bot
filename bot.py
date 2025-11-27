@@ -3,6 +3,7 @@ Wind Bot - Notifications Modèles Météo
 Bot Telegram qui prévient quand les runs météo sont disponibles
 V1.1 avec commande /prochain (prédiction ETAs)
 V1.1.2 avec commande /lol (blagues)
+V1.2 avec notifications admin (erreurs critiques + nouveaux users)
 """
 import logging
 import requests
@@ -48,6 +49,54 @@ logger = logging.getLogger(__name__)
 
 # Réduire la verbosité de httpx (utilisé par telegram bot)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+# ============ SYSTÈME DE NOTIFICATIONS ADMIN (V1.2) ============
+
+# Throttling des notifications d'erreurs : {error_type: last_sent_timestamp}
+_admin_notif_throttle = {}
+ADMIN_THROTTLE_MINUTES = 10
+
+
+async def send_admin_notification(bot, message: str, error_type: str = "general"):
+    """
+    Envoie une notification à l'admin avec throttling.
+    
+    Args:
+        bot: Instance du bot Telegram
+        message: Message à envoyer
+        error_type: Type d'erreur pour le throttling (ex: "db_error", "api_timeout")
+    
+    Returns:
+        True si notif envoyée, False sinon
+    """
+    if not ADMIN_CHAT_ID or ADMIN_CHAT_ID == 0:
+        logger.warning("⚠️ ADMIN_CHAT_ID non configuré, notification ignorée")
+        return False
+    
+    # Vérifier throttling
+    now = datetime.now(timezone.utc)
+    last_sent = _admin_notif_throttle.get(error_type)
+    
+    if last_sent:
+        elapsed = (now - last_sent).total_seconds() / 60
+        if elapsed < ADMIN_THROTTLE_MINUTES:
+            logger.debug(f"Admin notif throttled: {error_type} (envoyée il y a {elapsed:.1f}min)")
+            return False
+    
+    # Envoyer notification
+    try:
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"🔔 **Admin Alert**\n\n{message}",
+            parse_mode="Markdown"
+        )
+        _admin_notif_throttle[error_type] = now
+        logger.info(f"✅ Admin notifié: {error_type}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Échec notification admin: {e}")
+        return False
 
 
 # ============ CONSTANTES POUR /PROCHAIN (V1.1) ============
@@ -317,11 +366,23 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
     username = update.message.from_user.username
     
+    # Vérifier si c'est un nouvel utilisateur
+    existing_user = get_user(chat_id)
+    is_new_user = existing_user is None
+    
     user = get_or_create_user(chat_id, username)
     
     # Si user existait et était inactif, le réactiver
     if not user["active"]:
         reactivate_user(chat_id)
+    
+    # V1.2: Notifier admin si nouvel utilisateur
+    if is_new_user and context.application.bot:
+        await send_admin_notification(
+            context.application.bot,
+            f"👤 **Nouvel utilisateur inscrit**\n\nChat ID: `{chat_id}`\nUsername: @{username or 'N/A'}",
+            error_type="new_user"
+        )
     
     welcome_text = """
 🌊 **Bienvenue sur Wind Bot !**
@@ -347,7 +408,7 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
     """
     
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
-    logger.info(f"User {chat_id} ({username}) started the bot")
+    logger.info(f"User {chat_id} ({username}) started the bot (new: {is_new_user})")
 
 
 async def aide_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -997,6 +1058,10 @@ def main():
     if not BOT_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN non défini")
         return
+    
+    # Vérifier ADMIN_CHAT_ID
+    if not ADMIN_CHAT_ID or ADMIN_CHAT_ID == 0:
+        logger.warning("⚠️ ADMIN_CHAT_ID non configuré - notifications admin désactivées")
     
     # Initialiser la base de données
     init_database()

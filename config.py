@@ -13,8 +13,8 @@ DATABASE_PATH = os.environ.get("DATABASE_PATH", "bot.db")
 AROME_API_KEY = os.environ.get("AROME_API_KEY")
 ARPEGE_API_KEY = os.environ.get("ARPEGE_API_KEY")
 
-# ID admin pour tests (toi)
-ADMIN_CHAT_ID = 673360042
+# ID admin pour notifications spéciales (erreurs critiques + nouveaux users)
+ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
 
 # Modèles météo disponibles
 MODELS = {
