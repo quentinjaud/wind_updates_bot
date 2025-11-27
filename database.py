@@ -3,9 +3,16 @@ Gestion de la base de données SQLite
 """
 import sqlite3
 import json
+import os
+import logging
 from datetime import datetime, timezone
 
-from config import DATABASE_PATH
+# Configuration du chemin de la base de données
+# Par défaut : répertoire courant
+# Avec volume Railway : /data/wind_bot.db
+DATABASE_PATH = os.getenv("DB_PATH", "wind_bot.db")
+
+logger = logging.getLogger(__name__)
 
 
 def get_connection():
@@ -15,8 +22,42 @@ def get_connection():
     return conn
 
 
+def check_persistence():
+    """Vérifie et log l'état de la persistence de la base de données"""
+    db_abs_path = os.path.abspath(DATABASE_PATH)
+    db_exists = os.path.exists(DATABASE_PATH)
+    
+    logger.info(f"📁 Database path: {db_abs_path}")
+    logger.info(f"📁 Database exists: {db_exists}")
+    
+    if db_exists:
+        db_size = os.path.getsize(DATABASE_PATH)
+        logger.info(f"📁 Database size: {db_size} bytes")
+        
+        # Compter les données existantes
+        conn = get_connection()
+        try:
+            user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            runs_count = conn.execute("SELECT COUNT(*) FROM last_runs").fetchone()[0]
+            logger.info(f"🔍 PERSISTENCE CHECK - Users: {user_count}, Last runs: {runs_count}")
+            
+            if user_count == 0 and runs_count == 0:
+                logger.warning("⚠️  Database is empty - might not be persisted between deploys!")
+            else:
+                logger.info("✅ Database contains data - persistence seems OK")
+        except sqlite3.OperationalError:
+            logger.warning("⚠️  Tables don't exist yet - first run")
+        finally:
+            conn.close()
+    else:
+        logger.info("📝 Database doesn't exist yet - will be created")
+
+
 def init_database():
     """Initialise les tables si elles n'existent pas"""
+    # Vérifier la persistence avant d'initialiser
+    check_persistence()
+    
     conn = get_connection()
     
     conn.execute("""
@@ -43,7 +84,11 @@ def init_database():
     
     conn.commit()
     conn.close()
-    print("✅ Base de données initialisée")
+    
+    logger.info("✅ Database initialized")
+    
+    # Re-check après init pour voir le résultat
+    check_persistence()
 
 
 # ============ USERS ============
