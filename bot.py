@@ -28,10 +28,13 @@ from database import (
 )
 from checker import get_all_latest_runs, get_all_cached_runs, init_cache
 
-# Configuration logging
+import sys
+
+# Configuration logging - TOUT sur stdout pour Railway
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout  # Force stdout au lieu de stderr
 )
 logger = logging.getLogger(__name__)
 
