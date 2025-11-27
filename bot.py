@@ -1,9 +1,11 @@
 """
 Wind Bot - Notifications Modèles Météo
 Bot Telegram qui prévient quand les runs météo sont disponibles
+V1.1 avec commande /prochain (prédiction ETAs)
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -25,6 +27,8 @@ from database import (
     deactivate_user,
     reactivate_user,
     count_active_users,
+    get_next_run_eta,  # V1.1
+    get_connection,    # V1.1
 )
 from checker import get_all_latest_runs, get_all_cached_runs, init_cache
 
@@ -40,6 +44,143 @@ logger = logging.getLogger(__name__)
 
 # Réduire la verbosité de httpx (utilisé par telegram bot)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+# ============ CONSTANTES POUR /PROCHAIN (V1.1) ============
+
+# Délais fallback en minutes (utilisés quand pas encore de stats)
+FALLBACK_DELAYS = {
+    "AROME": {
+        0: 270,   # 4h30 → dispo ~04h30 Paris
+        6: 300,   # 5h00 → dispo ~11h00 Paris
+        12: 285,  # 4h45 → dispo ~16h45 Paris
+        18: 300,  # 5h00 → dispo ~23h00 Paris
+    },
+    "ARPEGE": {
+        0: 300,   # 5h00 → dispo ~05h00 Paris
+        6: 330,   # 5h30 → dispo ~11h30 Paris
+        12: 315,  # 5h15 → dispo ~17h15 Paris
+        18: 330,  # 5h30 → dispo ~23h30 Paris
+    },
+    "GFS": {
+        0: 270,   # 4h30 → dispo ~04h30 Paris
+        6: 300,   # 5h00 → dispo ~11h00 Paris
+        12: 285,  # 4h45 → dispo ~16h45 Paris
+        18: 300,  # 5h00 → dispo ~23h00 Paris
+    },
+    "ECMWF": {
+        0: 540,   # 9h00 → dispo ~09h00 Paris
+        12: 540,  # 9h00 → dispo ~21h00 Paris
+    }
+}
+
+EMOJI_MAP = {
+    "AROME": "⛵",
+    "ARPEGE": "🌍",
+    "GFS": "🌎",
+    "ECMWF": "🇪🇺"
+}
+
+
+# ============ FONCTIONS HELPER POUR /PROCHAIN (V1.1) ============
+
+def calculate_next_run(now: datetime, run_hour: int) -> datetime:
+    """Calcule le prochain run_datetime pour une heure donnée"""
+    # Créer datetime pour le run aujourd'hui
+    today_run = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+    
+    # Si déjà passé, prendre demain
+    if now >= today_run:
+        return today_run + timedelta(days=1)
+    return today_run
+
+
+def get_eta_with_fallback(model: str, run_hour: int, run_datetime: datetime) -> tuple[datetime | None, bool]:
+    """
+    Retourne (ETA, has_stats).
+    has_stats = True si basé sur vraies données, False si fallback
+    """
+    # Essayer stats réelles
+    eta = get_next_run_eta(model, run_hour, run_datetime)
+    
+    if eta is not None:
+        return eta, True
+    
+    # Fallback hardcodé
+    delay_minutes = FALLBACK_DELAYS.get(model, {}).get(run_hour)
+    
+    if delay_minutes is None:
+        # Run pas supporté pour ce modèle (ex: ECMWF 06h)
+        return None, False
+    
+    return run_datetime + timedelta(minutes=delay_minutes), False
+
+
+def count_logs_for_stats():
+    """Compte le nombre total de logs disponibles"""
+    try:
+        conn = get_connection()
+        cursor = conn.execute("SELECT COUNT(*) FROM run_availability_log")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+    except:
+        return 0
+
+
+def format_prochain_message(runs_by_model: dict, show_all: bool = False):
+    """Formate le message groupé par modèle (Option B)"""
+    paris_tz = ZoneInfo('Europe/Paris')
+    now = datetime.now(timezone.utc)
+    
+    if show_all:
+        message = "🔮 **Tous les prochains runs (24h)**\n\n"
+    else:
+        message = "🔮 **Prochains runs (24h)**\n\n"
+    
+    if not runs_by_model:
+        return "Aucun run prévu dans les 24 prochaines heures."
+    
+    # Afficher par modèle
+    for model, runs in runs_by_model.items():
+        if not runs:
+            continue
+        
+        emoji = EMOJI_MAP.get(model, "🌐")
+        message += f"{emoji} **{model}**\n"
+        
+        for run in runs:
+            eta = run['eta']
+            run_hour = run['run_hour']
+            has_stats = run['has_stats']
+            
+            # Convertir en heure Paris
+            eta_paris = eta.astimezone(paris_tz)
+            
+            # Calculer délai relatif
+            delay = eta - now
+            hours = int(delay.total_seconds() // 3600)
+            minutes = int((delay.total_seconds() % 3600) // 60)
+            delay_str = f"dans {hours}h{minutes:02d}"
+            
+            # Indicateur source
+            source_icon = "📊" if has_stats else "⏱️"
+            
+            message += f"• {run_hour:02d}h → {eta_paris:%H:%M} ({delay_str}) {source_icon}\n"
+        
+        message += "\n"
+    
+    # Footer
+    logs_count = count_logs_for_stats()
+    if logs_count >= 30:
+        message += f"💡 📊 = stats réelles ({logs_count} obs) • ⏱️ = estimation"
+    else:
+        if logs_count > 0:
+            message += f"💡 Collecte en cours : {logs_count}/30 observations\n📊 = stats • ⏱️ = estimation"
+        else:
+            message += "💡 ⏱️ Estimations (collecte de stats en cours)"
+    
+    return message
 
 
 # ============ COMMANDES ============
@@ -70,6 +211,7 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
 📋 **Commandes :**
 /modeles — Choisir les modèles (AROME, GFS...)
 /horaires — Choisir quels runs recevoir
+/prochain — Prochains runs attendus (ETAs)
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
 /aide — Comprendre les runs météo
@@ -114,9 +256,12 @@ Un run "00h" utilise les observations de 00h UTC, mais le calcul prend du temps.
 Pour une nav le matin, consulte le run 00h dès qu'il sort (~04h).
 Pour une nav l'après-midi, attends le run 06h (~12h).
 
+🔮 **Nouveau :** Utilise /prochain pour voir quand les prochains runs sortiront !
+
 📋 **Commandes :**
 /modeles — Choisir les modèles
 /horaires — Choisir quels runs recevoir
+/prochain — Prochains runs attendus (ETAs)
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
 /arreter — Se désabonner
@@ -263,6 +408,71 @@ async def derniers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "\n\n💡 Le cache est rafraîchi toutes les 5 min."
     
     await wait_msg.edit_text(text, parse_mode="Markdown")
+
+
+async def prochain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /prochain [tout] - Affiche les prochains runs attendus (V1.1)"""
+    chat_id = update.message.chat.id
+    user = get_user(chat_id)
+    
+    # Détecter si "tout" est demandé
+    show_all = len(context.args) > 0 and context.args[0].lower() == "tout"
+    
+    if show_all:
+        # Tous les modèles et runs
+        models_to_check = list(MODELS.keys())
+        runs_to_check = [0, 6, 12, 18]
+    else:
+        # Seulement les modèles/runs suivis par l'user
+        if not user:
+            await update.message.reply_text(
+                "Tu n'es pas encore inscrit ! Utilise /start pour commencer."
+            )
+            return
+        
+        models_to_check = user['models'] if user['models'] else list(MODELS.keys())
+        runs_to_check = user['runs'] if user['runs'] else [6, 12]  # Défaut jour
+    
+    # Message d'attente
+    wait_msg = await update.message.reply_text("🔮 Calcul des prochains runs...")
+    
+    # Construire la liste des runs
+    now = datetime.now(timezone.utc)
+    runs_by_model = {}
+    
+    for model in models_to_check:
+        model_runs = []
+        
+        for run_hour in runs_to_check:
+            # Calculer prochain run datetime
+            next_run_dt = calculate_next_run(now, run_hour)
+            
+            # Obtenir ETA avec fallback
+            result = get_eta_with_fallback(model, run_hour, next_run_dt)
+            
+            if result[0] is None:
+                # Run non supporté pour ce modèle (ex: ECMWF 06h)
+                continue
+            
+            eta, has_stats = result
+            
+            # Filtrer : seulement les runs dans les 24h à venir
+            if now < eta < now + timedelta(hours=24):
+                model_runs.append({
+                    'run_hour': run_hour,
+                    'eta': eta,
+                    'has_stats': has_stats
+                })
+        
+        # Trier les runs par heure (chronologique)
+        model_runs.sort(key=lambda x: x['eta'])
+        
+        if model_runs:
+            runs_by_model[model] = model_runs
+    
+    # Formatter et envoyer
+    message = format_prochain_message(runs_by_model, show_all)
+    await wait_msg.edit_text(message, parse_mode="Markdown")
 
 
 async def arreter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,11 +689,13 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     total_users = count_active_users()
+    logs_count = count_logs_for_stats()
     
     stats_text = f"""
 📈 **Stats Admin**
 
 👥 Utilisateurs actifs : {total_users}
+📊 Logs disponibilité : {logs_count}
     """
     
     await update.message.reply_text(stats_text, parse_mode="Markdown")
@@ -545,6 +757,7 @@ def main():
     app.add_handler(CommandHandler("aide", aide_command))
     app.add_handler(CommandHandler("modeles", modeles_command))
     app.add_handler(CommandHandler("horaires", horaires_command))
+    app.add_handler(CommandHandler("prochain", prochain_command))  # V1.1
     app.add_handler(CommandHandler("statut", statut_command))
     app.add_handler(CommandHandler("derniers", derniers_command))
     app.add_handler(CommandHandler("arreter", arreter_command))
