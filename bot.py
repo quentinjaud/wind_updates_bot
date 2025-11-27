@@ -35,6 +35,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Réduire la verbosité de httpx (utilisé par telegram bot)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 # ============ COMMANDES ============
 
