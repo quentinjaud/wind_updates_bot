@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![Railway](https://img.shields.io/badge/Deployed%20on-Railway-blueviolet)](https://railway.app/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1-orange.svg)](https://github.com/quentinjaud/wind_updates_bot/releases)
+[![Version](https://img.shields.io/badge/Version-1.1.2-orange.svg)](https://github.com/quentinjaud/wind_updates_bot/releases)
 
 ---
 
@@ -32,6 +32,10 @@ Plus besoin de rafraîchir obsessivement ton site météo préféré. ⛵
 - **Basée sur historique** : analyse des délais réels observés sur 30 jours
 - **Fallback intelligent** : estimations hardcodées pendant les 7 premiers jours
 
+### 😂 Détente (V1.1.2)
+- **Commande `/lol`** : une blague aléatoire pour décompresser entre deux runs
+- **Filtre `global` activé** : diminue les chances de tomber sur des blagues pas drôles
+
 ### 🌍 Modèles supportés
 - **AROME** ⛵ — France, très précis, courte échéance
 - **ARPEGE** 🌍 — Europe/Monde, moyenne distance
@@ -51,6 +55,7 @@ Plus besoin de rafraîchir obsessivement ton site météo préféré. ⛵
 | `/prochain tout` | 🆕 Voir TOUS les prochains runs (panorama complet) |
 | `/statut` | Voir tes abonnements actuels |
 | `/derniers` | Dernier run disponible par modèle |
+| `/lol` | 😂 Une blague pour rigoler |
 | `/aide` | Explications sur les runs météo |
 | `/arreter` | Se désabonner |
 
@@ -60,14 +65,24 @@ Plus besoin de rafraîchir obsessivement ton site météo préféré. ⛵
 🔮 Prochains runs (24h)
 
 ⛵ AROME
-• 12h → 16h47 (dans 2h32) 📊
-• 18h → 23h02 (dans 8h47) 📊
+• Run 12 → dispo 16h47 (dans 2h32) 📊
+• Run 18 → dispo 23h02 (dans 8h47) 📊
 
 🌍 ARPEGE
-• 12h → 17h15 (dans 3h00) ⏱️
+• Run 12 → dispo 17h15 (dans 3h00) ⏱️
 
 💡 Collecte en cours : 42/30 observations
 📊 = stats réelles • ⏱️ = estimation
+```
+
+### 😂 Exemple `/lol`
+
+```
+😂 Blague du jour :
+
+Pourquoi les plongeurs plongent-ils toujours en arrière ?
+
+||Parce que sinon ils tombent dans le bateau||
 ```
 
 ---
@@ -82,6 +97,7 @@ Plus besoin de rafraîchir obsessivement ton site météo préféré. ⛵
   - Météo-France WMS (AROME/ARPEGE)
   - NOAA NOMADS (GFS)
   - ECMWF Open Data (vérification HTTP directe)
+- **API blagues** : [blague-api.vercel.app](https://blague-api.vercel.app) (mode global)
 
 ### Flux de fonctionnement
 
@@ -167,6 +183,7 @@ python bot.py
 - **Temps vérification** : 2-5 secondes par modèle
 - **Cache hits** : ~85% (évite spam APIs)
 - **Précision prédictions** : ±3 minutes (après 30 jours de logs)
+- **Disponibilité API blagues** : >99% (fallback gracieux si erreur)
 
 ### Limites
 - **Dépendance APIs externes** : Si Météo-France/NOAA down, pas de détection
@@ -192,6 +209,11 @@ python bot.py
 - [x] Commande `/prochain tout` (panorama complet)
 - [x] Stats délais moyens par modèle/run
 - [x] Cleanup annuel automatique
+
+### ✅ V1.1.2 (Fun — Novembre 2025)
+- [x] Commande `/lol` (blagues aléatoires)
+- [x] Intégration API blague-api.vercel.app
+- [x] Mode `global` (blagues safe, tous publics)
 
 ### 🎯 V1.2 (Stats & Insights — Décembre 2025)
 - [ ] Commande `/stats` publique (délais moyens par modèle)
@@ -275,12 +297,26 @@ Par défaut, seuls les runs **06h** et **12h** sont activés. Pour changer : `/h
 ### Pourquoi les prédictions `/prochain` sont en ⏱️ ?
 Pendant les 7 premiers jours, Wind Bot collecte des statistiques. Les prédictions utilisent des délais hardcodés (⏱️). Après 7 jours, elles passent en 📊 (stats réelles).
 
+### Les blagues `/lol` sont-elles appropriées ?
+Le bot utilise le filtre `global` de l'API, qui exclut les catégories dark/limit/beauf/blondes. Cela diminue les chances de tomber sur des blagues pas drôles, mais aucun filtre n'est parfait !
+
 ### Puis-je héberger mon propre bot ?
 **Oui** ! Voir section [Installation](#-installation).
 
 ---
 
 ## 📜 Changelog
+
+### V1.1.2 — 27 novembre 2025
+**Nouveautés :**
+- 😂 Commande `/lol` : blague aléatoire pour détendre l'atmosphère
+- 🔗 Intégration API blague-api.vercel.app (filtre `global` pour éviter les blagues moins drôles)
+- 🎯 Spoiler markdown pour cacher les chutes des blagues
+
+**Améliorations :**
+- `/start` et `/aide` mis à jour avec mention de `/lol`
+- Timeout 10s sur requête API blagues (évite blocage bot)
+- Gestion d'erreur gracieuse si API blagues indisponible
 
 ### V1.1 — 27 novembre 2025
 **Nouveautés :**

@@ -2,8 +2,10 @@
 Wind Bot - Notifications Modèles Météo
 Bot Telegram qui prévient quand les runs météo sont disponibles
 V1.1 avec commande /prochain (prédiction ETAs)
+V1.1.2 avec commande /lol (blagues)
 """
 import logging
+import requests
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -281,6 +283,33 @@ def format_prochain_message(runs_by_model: dict, show_all: bool = False):
     return message
 
 
+# ============ FONCTIONS HELPER POUR /LOL (V1.1.2) ============
+
+def get_random_joke():
+    """
+    Récupère une blague aléatoire depuis l'API blague-api.vercel.app
+    Retourne (blague, reponse) ou None en cas d'erreur
+    """
+    try:
+        response = requests.get(
+            "https://blague-api.vercel.app/api?mode=global",
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        blague = data.get('blague', '').strip()
+        reponse = data.get('reponse', '').strip()
+        
+        return blague, reponse
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Erreur API blagues: {e}")
+        return None
+    except (KeyError, ValueError) as e:
+        logger.error(f"Erreur parsing blague: {e}")
+        return None
+
+
 # ============ COMMANDES ============
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -313,6 +342,7 @@ Pour ajouter d'autres runs (00h, 18h) → /horaires
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
 /aide — Comprendre les runs météo
+/lol — Une blague pour rigoler 😄
 /arreter — Se désabonner
     """
     
@@ -349,6 +379,7 @@ Pour une nav l'après-midi, attends le run 06h (~12h).
 /prochains — Prochains runs attendus (ETAs)
 /statut — Voir tes abonnements
 /derniers — Derniers runs disponibles
+/lol — Une blague pour rigoler 😄
 /arreter — Se désabonner
     """
     
@@ -573,6 +604,36 @@ async def prochains_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Envoyer avec bouton
     await wait_msg.edit_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+
+
+async def lol_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /lol - Affiche une blague aléatoire (V1.1.2)"""
+    
+    # Message d'attente
+    wait_msg = await update.message.reply_text("😄 Cherche une blague...")
+    
+    # Récupérer une blague
+    result = get_random_joke()
+    
+    if result is None:
+        await wait_msg.edit_text(
+            "😅 Oups, impossible de récupérer une blague pour le moment.\n"
+            "Réessaie dans quelques secondes !"
+        )
+        return
+    
+    blague, reponse = result
+    
+    # Formatter le message
+    if reponse:
+        # Blague avec question/réponse
+        message = f"😂 **Blague du jour :**\n\n{blague}\n\n||{reponse}||"
+    else:
+        # Blague simple
+        message = f"😂 **Blague du jour :**\n\n{blague}"
+    
+    await wait_msg.edit_text(message, parse_mode="Markdown")
+    logger.info(f"Blague envoyée à {update.message.chat.id}")
 
 
 async def arreter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -954,6 +1015,7 @@ def main():
     app.add_handler(CommandHandler("prochains", prochains_command))  # V1.1
     app.add_handler(CommandHandler("statut", statut_command))
     app.add_handler(CommandHandler("derniers", derniers_command))
+    app.add_handler(CommandHandler("lol", lol_command))  # V1.1.2
     app.add_handler(CommandHandler("arreter", arreter_command))
     
     # Commandes admin
